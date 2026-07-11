@@ -1,7 +1,14 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 
-export const viewport: Viewport = { width: "device-width", initialScale: 1, maximumScale: 1, userScalable: false, viewportFit: "cover", themeColor: "#080607" };
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
+  viewportFit: "cover",
+  themeColor: "#080607",
+};
 
 export const metadata: Metadata = {
   title: "白厄：逐火残响",
@@ -23,7 +30,17 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="zh-CN">
-      <body>{children}<div className="rotate-device"><span>↻</span><b>请将手机横过来</b><small>横屏可获得完整战斗视野</small></div></body>
+      <head>
+        <script src="/asset-bridge.js" />
+      </head>
+      <body>
+        {children}
+        <div className="rotate-device">
+          <span>↻</span>
+          <b>请将手机横过来</b>
+          <small>横屏可获得完整战斗视野</small>
+        </div>
+      </body>
     </html>
   );
 }
