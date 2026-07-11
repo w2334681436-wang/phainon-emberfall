@@ -13,6 +13,11 @@ type Enemy = {
   boss?: boolean;
   hit: number;
   facing: number;
+  skill?: number;
+  skillTime?: number;
+  skillMax?: number;
+  skillStep?: number;
+  cooldown?: number;
 };
 type Fx = { x: number; y: number; life: number; kind: string };
 type Meteor = {
@@ -21,9 +26,20 @@ type Meteor = {
   max: number;
   large: boolean;
 };
+type BossFx = {
+  x: number;
+  y: number;
+  life: number;
+  max: number;
+  kind: "wave" | "blackhole" | "sword" | "whitehole" | "teleport";
+  vx?: number;
+  hit?: boolean;
+};
 
 const GROUND_Y = 485;
 const ANIM_FRAME_TICKS = 6; // 60Hz logic -> 10fps sprite animation
+const MINIONS_TO_BOSS = 12;
+const BOSS_MAX_HP = 1600;
 const NORMAL_ANCHOR_Y: Record<number, number[]> = {
   0: [0, 0, 0, 0, 0, 8, 8, 8, 8, 8],
   2: [0, 3, 6, 3, 0, 6, 8, 11, 14, 11],
@@ -56,6 +72,8 @@ export default function Game() {
     combo: 0,
     transform: false,
     boss: 0,
+    bossMax: BOSS_MAX_HP,
+    bossActive: false,
   });
   const [notice, setNotice] = useState("");
   const [muted, setMuted] = useState(false),
@@ -127,20 +145,32 @@ export default function Game() {
     let enemies: Enemy[] = [];
     let fx: Fx[] = [];
     let meteors: Meteor[] = [];
+    let bossFx: BossFx[] = [];
+    let minionKills = 0,
+      bossIntro = 0,
+      bossArena = false,
+      bossDefeated = false;
     const bg = new Image();
     bg.src = "https://phainon-emberfall.opal-mint-9707.chatgpt.site/assets/hell-battlefield.png";
     const heroNormal = new Image();
     heroNormal.src = "https://phainon-emberfall.opal-mint-9707.chatgpt.site/assets/phainon-normal-v3.png";
     const heroGod = new Image();
     heroGod.src = "https://phainon-emberfall.opal-mint-9707.chatgpt.site/assets/phainon-god-v3.png";
+    const heroJump = new Image();
+    heroJump.src = "https://phainon-emberfall.opal-mint-9707.chatgpt.site/assets/phainon-jump-v4.png";
     const foes = new Image();
     foes.src = "https://phainon-emberfall.opal-mint-9707.chatgpt.site/assets/enemy-sprites-v2.png";
     const vfx = new Image();
     vfx.src = "https://phainon-emberfall.opal-mint-9707.chatgpt.site/assets/combat-vfx-v3.png";
+    const bossSheet = new Image();
+    bossSheet.src = "https://phainon-emberfall.opal-mint-9707.chatgpt.site/assets/fenfeng-boss-v4.png";
+    const whiteHole = new Image();
+    whiteHole.src = "https://phainon-emberfall.opal-mint-9707.chatgpt.site/assets/white-hole-battlefield-v4.png";
     const hit = (power: number, range: number) => {
       let landed = false;
       enemies.forEach((e) => {
-        if (Math.abs(e.x - p.x) < range && Math.abs(e.y - p.y) < 110) {
+        const forward = (e.x - p.x) * p.face;
+        if (forward > -32 && forward < range && Math.abs(e.y - p.y) < 150) {
           e.hp -= power;
           e.hit = 8;
           e.vx = p.face * 4;
@@ -182,6 +212,16 @@ export default function Game() {
       }
       return false;
     };
+    const hurtPlayer = (damage: number, knockback = 0) => {
+      if (p.inv > 0) return;
+      p.hp -= damage;
+      p.inv = 42;
+      p.hurt = 18;
+      p.vx = knockback;
+      p.combo = 0;
+      shake = Math.max(shake, 9);
+      fx.push({ x: p.x, y: p.y - 50, life: 18, kind: "hurt" });
+    };
     function frame(t: number) {
       let dt = Math.min(2, (t - last) / 16.67);
       last = t;
@@ -203,7 +243,7 @@ export default function Game() {
       }
       if (press("KeyJ") && p.atk <= 0 && p.transforming <= 0) {
         p.atk = 60;
-        hit(p.trans ? 34 : 18, p.trans ? 165 : 115);
+        hit(p.trans ? 34 : 18, p.trans ? 165 : 95);
       }
       if (press("KeyK") && p.skill <= 0 && p.mp >= 20 && p.transforming <= 0) {
         p.skill = p.trans > 0 ? 150 : 60;
@@ -212,7 +252,7 @@ export default function Game() {
         if (p.trans > 0) {
           setNotice("天陨劫火 · 全域轰炸");
           window.setTimeout(() => setNotice(""), 1100);
-        } else hit(38, 185);
+        } else hit(38, 320);
         if (!p.trans) p.ult = Math.min(100, p.ult + 24);
         shake = 8;
       }
@@ -278,48 +318,143 @@ export default function Game() {
       meteors.forEach((m) => (m.life = Math.max(0, m.life - dt)));
       meteors = meteors.filter((m) => m.life > 0);
       spawn -= dt;
-      if (spawn <= 0 && levelTime < 1850) {
-        let boss = levelTime > 1450 && enemies.every((e) => !e.boss);
-        if (enemies.length < (boss ? 1 : 5)) {
-          let kind = boss ? 6 : Math.floor(Math.random() * 6);
-          let hp = boss ? 720 : kind > 3 ? 120 : 45;
+      if (!bossArena && minionKills < MINIONS_TO_BOSS && spawn <= 0) {
+        if (enemies.length < 4) {
+          const kind = Math.floor(Math.random() * 6);
+          const hp = kind > 3 ? 120 : 45;
           enemies.push({
-            x: boss ? 830 : 990,
+            x: Math.random() > 0.5 ? 990 : 10,
             y: GROUND_Y,
-            vx: boss ? -1 : -1.2 - Math.random(),
+            vx: 0,
             hp,
             max: hp,
             kind,
-            boss,
             hit: 0,
             facing: -1,
           });
-          spawn = boss ? 9999 : 70;
+          spawn = 58;
+        }
+      }
+      if (!bossArena && minionKills >= MINIONS_TO_BOSS && enemies.length === 0) {
+        bossArena = true;
+        bossIntro = 100;
+        p.vx = 0;
+        setNotice("绝灭大君 · 焚风");
+        window.setTimeout(() => setNotice(""), 2200);
+      }
+      if (bossIntro > 0) {
+        bossIntro = Math.max(0, bossIntro - dt);
+        p.vx *= 0.5;
+        if (bossIntro < 48 && !enemies.some((e) => e.boss)) {
+          enemies.push({
+            x: 790,
+            y: 390,
+            vx: 0,
+            hp: BOSS_MAX_HP,
+            max: BOSS_MAX_HP,
+            kind: 7,
+            boss: true,
+            hit: 0,
+            facing: -1,
+            skill: -1,
+            skillTime: 0,
+            skillMax: 0,
+            skillStep: -1,
+            cooldown: 55,
+          });
         }
       }
       enemies.forEach((e) => {
-        let dist = p.x - e.x;
+        const dist = p.x - e.x;
         e.facing = Math.sign(dist) || e.facing;
-        if (Math.abs(dist) > 70) e.vx += Math.sign(dist) * 0.04;
-        e.vx *= 0.94;
-        e.x += e.vx * dt;
-        e.hit--;
-        if (Math.abs(dist) < 72 && p.inv <= 0 && e.hit <= 0) {
-          p.hp -= e.boss ? 14 : 7;
-          p.inv = 48;
-          p.hurt = 18;
-          p.vx = Math.sign(dist) * -8;
-          p.combo = 0;
-          shake = 7;
-          fx.push({ x: p.x, y: p.y - 40, life: 15, kind: "hurt" });
+        e.hit = Math.max(0, e.hit - dt);
+        if (!e.boss) {
+          if (Math.abs(dist) > 62) e.vx += Math.sign(dist) * 0.045;
+          e.vx *= 0.93;
+          e.x += e.vx * dt;
+          if (Math.abs(dist) < 66 && e.hit <= 0) hurtPlayer(7, -Math.sign(dist) * 7);
+          return;
+        }
+
+        e.vx = 0;
+        e.cooldown = Math.max(0, (e.cooldown || 0) - dt);
+        if ((e.skillTime || 0) <= 0 && (e.cooldown || 0) <= 0) {
+          e.skill = Math.floor(Math.random() * 5);
+          const durations = [78, 96, 112, 112, 150];
+          const skillNames = ["无距瞬斩", "白焰断空", "深渊引力", "棱镜剑雨", "终末白洞"];
+          e.skillMax = durations[e.skill];
+          e.skillTime = e.skillMax;
+          e.skillStep = -1;
+          setNotice(`焚风 · ${skillNames[e.skill]}`);
+          window.setTimeout(() => setNotice(""), 900);
+        }
+        if ((e.skillTime || 0) > 0) {
+          e.skillTime = Math.max(0, (e.skillTime || 0) - dt);
+          const elapsed = (e.skillMax || 0) - (e.skillTime || 0);
+          const step = Math.floor(elapsed / 12);
+          if (step > (e.skillStep ?? -1)) {
+            e.skillStep = step;
+            if (e.skill === 0 && step === 1) {
+              bossFx.push({ x: e.x, y: e.y, life: 30, max: 30, kind: "teleport" });
+              e.x = Math.max(80, Math.min(920, p.x - p.face * 105));
+              e.facing = Math.sign(p.x - e.x) || -1;
+            }
+            if (e.skill === 0 && step === 3 && Math.abs(e.x - p.x) < 175)
+              hurtPlayer(18, e.facing * 11);
+            if (e.skill === 1 && step === 2)
+              bossFx.push({ x: e.x, y: 425, life: 86, max: 86, kind: "wave", vx: e.facing * 11 });
+            if (e.skill === 2 && step === 2)
+              bossFx.push({ x: p.x, y: 280, life: 100, max: 100, kind: "blackhole" });
+            if (e.skill === 3 && step >= 1 && step <= 7)
+              bossFx.push({ x: 70 + Math.random() * 860, y: 35, life: 58, max: 58, kind: "sword" });
+            if (e.skill === 4 && step === 4)
+              bossFx.push({ x: 500, y: 230, life: 105, max: 105, kind: "whitehole" });
+          }
+          if (e.skillTime === 0) {
+            e.skill = -1;
+            e.cooldown = 38 + Math.random() * 26;
+          }
+        } else {
+          e.x += Math.sign(dist) * Math.min(1.3, Math.abs(dist) * 0.008) * dt;
         }
       });
+
+      bossFx.forEach((b) => {
+        b.life = Math.max(0, b.life - dt);
+        if (b.kind === "wave") {
+          b.x += (b.vx || 0) * dt;
+          if (!b.hit && Math.abs(b.x - p.x) < 58 && Math.abs(p.y - GROUND_Y) < 100) {
+            b.hit = true;
+            hurtPlayer(16, Math.sign(b.vx || 1) * 9);
+          }
+        }
+        if (b.kind === "blackhole") {
+          p.vx += Math.sign(b.x - p.x) * 0.18 * dt;
+          if (Math.abs(b.x - p.x) < 90 && Math.floor(b.life) % 28 < 2)
+            hurtPlayer(9, Math.sign(p.x - b.x) * 5);
+        }
+        if (b.kind === "sword") {
+          b.y += 8.5 * dt;
+          if (!b.hit && b.y > 390 && Math.abs(b.x - p.x) < 48) {
+            b.hit = true;
+            hurtPlayer(12, Math.sign(p.x - b.x) * 6);
+          }
+        }
+        if (b.kind === "whitehole" && b.life < 52 && !b.hit) {
+          b.hit = true;
+          hurtPlayer(26, Math.sign(p.x - 500) * 13);
+          shake = 28;
+        }
+      });
+      bossFx = bossFx.filter((b) => b.life > 0 && b.x > -180 && b.x < 1180);
       enemies = enemies.filter((e) => {
         if (e.hp <= 0) {
           p.score += e.boss ? 5000 : 250;
           p.mp = Math.min(100, p.mp + 18);
           if (!p.trans) p.ult = Math.min(100, p.ult + 12);
           fx.push({ x: e.x, y: e.y - 45, life: 35, kind: "boom" });
+          if (e.boss) bossDefeated = true;
+          else minionKills++;
           return false;
         }
         return true;
@@ -331,7 +466,7 @@ export default function Game() {
         setMode("dead");
         return;
       }
-      if (levelTime > 1500 && !enemies.some((e) => e.boss) && spawn > 9000) {
+      if (bossDefeated && !enemies.some((e) => e.boss)) {
         setMode("won");
         return;
       }
@@ -342,13 +477,19 @@ export default function Game() {
         enemies,
         fx,
         meteors,
+        bossFx,
         bg,
+        whiteHole,
         heroNormal,
         heroGod,
+        heroJump,
         foes,
+        bossSheet,
         vfx,
         shake,
         levelTime,
+        bossArena,
+        bossIntro,
       );
       if (t - uiLast >= 100) {
         uiLast = t;
@@ -360,6 +501,8 @@ export default function Game() {
           combo: p.combo,
           transform: p.trans > 0 || p.transforming > 0,
           boss: enemies.find((e) => e.boss)?.hp || 0,
+          bossMax: BOSS_MAX_HP,
+          bossActive: enemies.some((e) => e.boss),
         });
       }
       raf = requestAnimationFrame(frame);
@@ -458,6 +601,16 @@ export default function Game() {
               {String(ui.score).padStart(7, "0")}
               {ui.combo > 1 && <b>{ui.combo} HIT</b>}
             </div>
+            {ui.bossActive && (
+              <div className="boss-hud">
+                <small>绝灭大君 · LORD RAVAGER</small>
+                <b>焚风</b>
+                <div>
+                  <i style={{ width: `${(ui.boss / ui.bossMax) * 100}%` }} />
+                </div>
+                <em>{Math.ceil(ui.boss)} / {ui.bossMax}</em>
+              </div>
+            )}
             <div className="ult">
               <div
                 className={ui.ult >= 100 ? "ready" : ""}
@@ -567,7 +720,7 @@ export default function Game() {
       <footer>
         <span>◈ 火种共鸣：稳定</span>
         <span>目标：穿越焦土，击破焚风投影</span>
-        <span>v1.0 FAN PROJECT</span>
+        <span>v1.1 FENFENG UPDATE</span>
       </footer>
     </main>
   );
@@ -639,13 +792,19 @@ function draw(
   enemies: Enemy[],
   fx: Fx[],
   meteors: Meteor[],
+  bossFx: BossFx[],
   bg: HTMLImageElement,
+  whiteHole: HTMLImageElement,
   heroNormal: HTMLImageElement,
   heroGod: HTMLImageElement,
+  heroJump: HTMLImageElement,
   foes: HTMLImageElement,
+  bossSheet: HTMLImageElement,
   vfx: HTMLImageElement,
   shake: number,
   time: number,
+  bossArena: boolean,
+  bossIntro: number,
 ) {
   ctx.save();
   // Deterministic camera impulse avoids random per-frame sprite jitter.
@@ -655,7 +814,8 @@ function draw(
   );
   ctx.fillStyle = "#12090b";
   ctx.fillRect(0, 0, c.width, c.height);
-  if (bg.complete) ctx.drawImage(bg, 0, 0, c.width, c.height);
+  const arenaBg = bossArena ? whiteHole : bg;
+  if (arenaBg.complete) ctx.drawImage(arenaBg, 0, 0, c.width, c.height);
   else {
     let g = ctx.createLinearGradient(0, 0, 0, 560);
     g.addColorStop(0, "#17070b");
@@ -664,31 +824,55 @@ function draw(
     ctx.fillStyle = g;
     ctx.fillRect(0, 0, 1000, 560);
   }
-  ctx.fillStyle = "rgba(255,89,25,.18)";
+  ctx.fillStyle = bossArena ? "rgba(255,255,255,.16)" : "rgba(255,89,25,.18)";
   for (let i = 0; i < 18; i++) {
     let x = (i * 173 + time * 1.4) % 1000,
       y = 100 + ((i * 67) % 330);
     ctx.fillRect(x, y, 2 + (i % 3), 2 + (i % 3));
   }
-  ctx.fillStyle = "#180b0a";
+  ctx.fillStyle = bossArena ? "#090a0d" : "#180b0a";
   ctx.fillRect(0, 485, 1000, 75);
-  ctx.fillStyle = "#742617";
+  ctx.fillStyle = bossArena ? "#dedbd2" : "#742617";
   ctx.fillRect(0, 485, 1000, 5);
   enemies.forEach((e) => {
     const ex = Math.round(e.x);
     ctx.save();
-    if (e.facing < 0) {
-      ctx.translate(ex * 2, 0);
-      ctx.scale(-1, 1);
-    }
     if (e.hit > 0) ctx.globalCompositeOperation = "screen";
     let scale = e.boss ? 1.8 : e.kind > 3 ? 1.25 : 1;
-    if (foes.complete && foes.naturalWidth) {
+    if (e.boss && bossSheet.complete && bossSheet.naturalWidth) {
+      const elapsed = (e.skillMax || 0) - (e.skillTime || 0);
+      let pair = 0;
+      if (e.skill === 0) pair = elapsed < 24 ? 2 : 4;
+      if (e.skill === 1) pair = 6;
+      if (e.skill === 2) pair = 8;
+      if (e.skill === 3) pair = 10;
+      if (e.skill === 4) pair = 12;
+      const frame = e.skill === -1
+        ? Math.floor(time / ANIM_FRAME_TICKS) % 10
+        : Math.min(9, Math.floor((elapsed / Math.max(1, e.skillMax || 1)) * 10));
+      drawAtlas(
+        ctx,
+        bossSheet,
+        pair,
+        frame,
+        14,
+        ex - 145,
+        e.y - 235,
+        290,
+        270,
+        e.facing < 0,
+      );
+    } else if (foes.complete && foes.naturalWidth) {
+      if (e.facing < 0) {
+        ctx.translate(ex * 2, 0);
+        ctx.scale(-1, 1);
+      }
+      ctx.filter = "grayscale(1) brightness(.18) contrast(1.8)";
       let cols = 8,
         sw = foes.naturalWidth / cols,
         sh = foes.naturalHeight / 3,
-        row = e.boss ? 2 : e.kind > 3 ? 1 : 0,
-        col = e.hit > 0 ? 7 : Math.floor(time / (e.boss ? 12 : 8)) % 3;
+        row = e.kind > 3 ? 1 : 0,
+        col = e.hit > 0 ? 7 : Math.floor(time / 8) % 3;
       ctx.drawImage(
         foes,
         col * sw,
@@ -701,15 +885,16 @@ function draw(
         140 * scale,
       );
     } else {
-      ctx.fillStyle = e.boss ? "#f05a24" : "#351a24";
+      ctx.fillStyle = "#08090d";
       ctx.fillRect(ex - 25 * scale, e.y - 70 * scale, 50 * scale, 70 * scale);
       ctx.fillStyle = "#ffc15b";
       ctx.fillRect(ex - 12 * scale, e.y - 55 * scale, 8, 8);
     }
     ctx.restore();
+    if (e.boss) return;
     ctx.fillStyle = "#1b0909";
     ctx.fillRect(ex - 40 * scale, e.y - 115 * scale, 80 * scale, 6);
-    ctx.fillStyle = e.boss ? "#f45a24" : "#e9b45f";
+    ctx.fillStyle = "#b7a98b";
     ctx.fillRect(
       ex - 40 * scale,
       e.y - 115 * scale,
@@ -717,13 +902,78 @@ function draw(
       6,
     );
   });
+  bossFx.forEach((b) => {
+    const progress = 1 - b.life / b.max;
+    ctx.save();
+    if (b.kind === "teleport") {
+      ctx.globalAlpha = Math.sin(progress * Math.PI);
+      ctx.strokeStyle = "#ffffff";
+      ctx.lineWidth = 5;
+      for (let i = 0; i < 4; i++) {
+        ctx.beginPath();
+        ctx.ellipse(b.x, b.y - 75, 22 + i * 18, 70 - i * 9, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+    if (b.kind === "wave") {
+      const grad = ctx.createLinearGradient(b.x - 90, b.y, b.x + 90, b.y);
+      grad.addColorStop(0, "transparent");
+      grad.addColorStop(0.45, "#ffffff");
+      grad.addColorStop(0.62, "#8af7ff");
+      grad.addColorStop(1, "transparent");
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = 18;
+      ctx.beginPath();
+      ctx.moveTo(b.x - 100, b.y + 20);
+      ctx.quadraticCurveTo(b.x, b.y - 85, b.x + 105, b.y + 5);
+      ctx.stroke();
+    }
+    if (b.kind === "blackhole") {
+      const r = 35 + Math.sin(progress * Math.PI) * 75;
+      const grad = ctx.createRadialGradient(b.x, b.y, 5, b.x, b.y, r);
+      grad.addColorStop(0, "#fff");
+      grad.addColorStop(0.12, "#09090e");
+      grad.addColorStop(0.6, "#44386e");
+      grad.addColorStop(1, "transparent");
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = "#eef4ff";
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.ellipse(b.x, b.y, r * 1.45, r * 0.35, -0.25, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    if (b.kind === "sword") {
+      ctx.translate(Math.round(b.x), Math.round(b.y));
+      ctx.rotate(0.16);
+      ctx.fillStyle = "#f9fbff";
+      ctx.fillRect(-4, -55, 8, 90);
+      ctx.fillStyle = "#15131d";
+      ctx.fillRect(-10, 28, 20, 7);
+    }
+    if (b.kind === "whitehole") {
+      const r = 70 + progress * 430;
+      const grad = ctx.createRadialGradient(b.x, b.y, 12, b.x, b.y, r);
+      grad.addColorStop(0, "#ffffff");
+      grad.addColorStop(0.25, "rgba(255,255,255,.95)");
+      grad.addColorStop(0.55, "rgba(173,205,255,.5)");
+      grad.addColorStop(1, "transparent");
+      ctx.globalCompositeOperation = "screen";
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, 1000, 560);
+    }
+    ctx.restore();
+  });
   const idleFrame = Math.floor(time / ANIM_FRAME_TICKS) % 10;
-  const flip = p.face < 0;
+  const normalFlip = p.face < 0;
+  const godFlip = p.face > 0;
   ctx.save();
   ctx.globalAlpha = 0.34;
   ctx.fillStyle = p.trans > 0 ? "#f2c95f" : "#080508";
   ctx.beginPath();
-  ctx.ellipse(p.x, p.y + 2, p.trans > 0 ? 55 : 34, 9, 0, 0, Math.PI * 2);
+  ctx.ellipse(p.x, GROUND_Y + 2, p.trans > 0 ? 55 : 34, 9, 0, 0, Math.PI * 2);
   ctx.fill();
   ctx.restore();
   let drawn = false;
@@ -739,10 +989,27 @@ function draw(
       f,
       8,
       Math.round(p.x - 105),
-      GROUND_Y - 220,
+      Math.round(p.y - 220),
       220,
       220,
-      flip,
+      godFlip,
+    );
+  } else if (!p.ground && p.atk <= 0 && p.skill <= 0) {
+    const jumpProgress = Math.max(0, Math.min(1, (GROUND_Y - p.y) / 120));
+    const jumpFrame = p.vy < 0
+      ? Math.min(4, Math.floor(jumpProgress * 5))
+      : 5 + Math.min(4, Math.floor((1 - jumpProgress) * 5));
+    drawn = drawAtlas(
+      ctx,
+      heroJump,
+      p.trans > 0 ? 2 : 0,
+      jumpFrame,
+      4,
+      Math.round(p.x - (p.trans ? 110 : 85)),
+      Math.round(p.y - (p.trans ? 220 : 175)),
+      p.trans ? 220 : 170,
+      p.trans ? 220 : 175,
+      p.trans ? godFlip : normalFlip,
     );
   } else if (p.trans > 0) {
     const pair = p.skill > 0 ? 6 : p.atk > 0 ? 4 : 2;
@@ -759,10 +1026,10 @@ function draw(
       f,
       8,
       Math.round(p.x - 110),
-      GROUND_Y - 220,
+      Math.round(p.y - 220),
       220,
       220,
-      flip,
+      godFlip,
     );
   } else {
     const pair = p.skill > 0 || p.atk > 0 ? 4 : Math.abs(p.vx) > 1 ? 2 : 0;
@@ -779,10 +1046,10 @@ function draw(
       f,
       6,
       Math.round(p.x - 80),
-      GROUND_Y - 160,
+      Math.round(p.y - 160),
       160,
       160,
-      flip,
+      normalFlip,
     );
   }
   if (!drawn) {
@@ -795,17 +1062,17 @@ function draw(
     if (p.atk > 0) {
       const f = Math.floor((60 - p.atk) / ANIM_FRAME_TICKS);
       const pair = p.trans > 0 ? 4 : 0;
-      const w = p.trans > 0 ? 360 : 260,
-        h = p.trans > 0 ? 230 : 160;
+      const w = p.trans > 0 ? 360 : 190,
+        h = p.trans > 0 ? 230 : 145;
       const x = p.face > 0 ? p.x - 15 : p.x - w + 15;
-      drawAtlas(ctx, vfx, pair, f, 10, x, p.y - h / 2 - 55, w, h, flip);
+      drawAtlas(ctx, vfx, pair, f, 10, x, p.y - h / 2 - 55, w, h, normalFlip);
     }
     if (p.skill > 0 && p.trans <= 0) {
       const f = Math.floor((60 - p.skill) / ANIM_FRAME_TICKS),
-        w = 400,
+        w = 360,
         h = 230;
       const x = p.face > 0 ? p.x - 20 : p.x - w + 20;
-      drawAtlas(ctx, vfx, 2, f, 10, x, p.y - h / 2 - 55, w, h, flip);
+      drawAtlas(ctx, vfx, 2, f, 10, x, p.y - h / 2 - 55, w, h, normalFlip);
     }
     meteors.forEach((meteor) => {
       const progress = 1 - meteor.life / meteor.max;
@@ -847,5 +1114,9 @@ function draw(
     ctx.stroke();
     ctx.restore();
   });
+  if (bossIntro > 0) {
+    ctx.fillStyle = `rgba(0,0,0,${bossIntro > 55 ? 1 : bossIntro / 55})`;
+    ctx.fillRect(-40, -40, 1080, 640);
+  }
   ctx.restore();
 }
