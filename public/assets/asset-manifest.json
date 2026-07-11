@@ -1,6 +1,13 @@
 {
-  "version": "1.0",
+  "version": "2.0-aligned",
   "fps": 20,
+  "frameDurationMs": 50,
+  "alignment": {
+    "normal": "角色脚底固定到每格底部基准线，身体中心保持稳定",
+    "god": "悬浮动作身体中心与悬浮高度固定，只有翅膀、衣摆和手臂变化",
+    "enemy": "每行敌人使用统一地面基准线",
+    "effects": "角色动作与攻击特效完全分图层"
+  },
   "assets": {
     "background": {
       "path": "/assets/backgrounds/hell-battlefield.png",
@@ -8,35 +15,39 @@
     },
     "normalCharacter": {
       "path": "/assets/characters/phainon-normal-v3.png",
-      "grid": { "columns": 5, "rows": 6 },
+      "size": [1000, 1200],
+      "grid": { "columns": 5, "rows": 6, "cell": [200, 200] },
       "pairs": {
         "0": "idle",
         "2": "run",
-        "4": "attack-body"
+        "4": "attack-body-only"
       }
     },
     "godCharacter": {
       "path": "/assets/characters/phainon-god-v3.png",
-      "grid": { "columns": 5, "rows": 8 },
+      "size": [1000, 1600],
+      "grid": { "columns": 5, "rows": 8, "cell": [200, 200] },
       "pairs": {
         "0": "transform",
         "2": "hover-idle",
-        "4": "red-rift-attack-body",
-        "6": "meteor-cast-body"
+        "4": "red-rift-attack-body-only",
+        "6": "meteor-cast-body-only"
       }
     },
     "enemyAtlas": {
       "path": "/assets/enemies/enemy-sprites-v2.png",
-      "grid": { "columns": 8, "rows": 3 },
+      "size": [1536, 576],
+      "grid": { "columns": 8, "rows": 3, "cell": [192, 192] },
       "rows": {
-        "0": "mob",
-        "1": "elite",
-        "2": "boss"
+        "0": "black-hellhound",
+        "1": "black-armored-elite",
+        "2": "black-destruction-boss"
       }
     },
     "combatVfx": {
       "path": "/assets/effects/combat-vfx-v3.png",
-      "grid": { "columns": 5, "rows": 10 },
+      "size": [1000, 2000],
+      "grid": { "columns": 5, "rows": 10, "cell": [200, 200] },
       "pairs": {
         "0": "yellow-sword-wave",
         "2": "blue-large-sword-wave",
