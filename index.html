@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no" />
+  <meta name="theme-color" content="#140c19" />
+  <meta name="description" content="《白厄：逐火残响》——原创像素风同人横版动作游戏。" />
+  <title>白厄：逐火残响</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22><path fill=%22%23ffb24d%22 d=%22M32 2 46 25 37 25 50 62 30 42 20 62 25 31 14 31z%22/></svg>" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <main id="app" aria-label="白厄逐火残响游戏">
+    <canvas id="game" width="1280" height="720" tabindex="0"></canvas>
+
+    <section id="menu" class="panel visible" aria-live="polite">
+      <div class="eyebrow">PHANON · EMBERFALL</div>
+      <h1>白厄：逐火残响</h1>
+      <p class="subtitle">横越焚烧地狱，向绝灭大君挥出最后一剑。</p>
+      <div class="menu-actions">
+        <button id="startBtn" class="primary">开始逐火</button>
+        <button id="continueBtn">继续旅程</button>
+        <button id="howBtn">操作说明</button>
+      </div>
+      <p class="small">非商业同人作品。角色设定归原作权利方所有；像素素材与代码为本项目原创。</p>
+    </section>
+
+    <section id="how" class="panel" aria-live="polite">
+      <h2>操作说明</h2>
+      <div class="control-grid">
+        <span>移动</span><b>A / D 或 ← / →</b>
+        <span>跳跃 / 二段跳</span><b>Space / W / ↑</b>
+        <span>闪避</span><b>Shift</b>
+        <span>普通攻击</span><b>J</b>
+        <span>战技</span><b>K</b>
+        <span>终结技 · 神厄</span><b>L</b>
+        <span>暂停</span><b>Esc</b>
+      </div>
+      <p>连续按下普通攻击可打出三段连击。神厄状态下，普攻与战技会改变，并持续消耗神性时间。</p>
+      <button id="closeHow" class="primary">返回</button>
+    </section>
+
+    <section id="pause" class="panel">
+      <h2>战火暂歇</h2>
+      <button id="resumeBtn" class="primary">继续</button>
+      <button id="restartBtn">重新开始本关</button>
+      <button id="menuBtn">返回标题</button>
+    </section>
+
+    <section id="gameOver" class="panel">
+      <div class="eyebrow">THE FLAME STILL REMEMBERS</div>
+      <h2>火种尚未熄灭</h2>
+      <button id="retryBtn" class="primary">再次挑战</button>
+      <button id="gameOverMenu">返回标题</button>
+    </section>
+
+    <section id="victory" class="panel">
+      <div class="eyebrow">EMBERFALL CLEARED</div>
+      <h2>你已斩断焚风</h2>
+      <p>在无数次轮回之外，火种终于记住了新的黎明。</p>
+      <button id="victoryRestart" class="primary">再次逐火</button>
+    </section>
+
+    <section id="dialogue" aria-live="polite">
+      <img id="portrait" alt="剧情角色头像" />
+      <div class="dialogue-copy">
+        <div id="speaker"></div>
+        <div id="dialogueText"></div>
+        <div class="continue">点击 / J / Space 继续 ▾</div>
+      </div>
+    </section>
+
+    <div id="toast" aria-live="polite"></div>
+
+    <nav id="touchControls" aria-label="触屏操作">
+      <div class="touch-left">
+        <button data-key="left" aria-label="向左">◀</button>
+        <button data-key="right" aria-label="向右">▶</button>
+        <button data-key="jump" class="jump" aria-label="跳跃">↑</button>
+      </div>
+      <div class="touch-right">
+        <button data-key="dodge" class="dodge" aria-label="闪避">闪</button>
+        <button data-key="attack" class="attack" aria-label="普通攻击">斩</button>
+        <button data-key="skill" class="skill" aria-label="战技">技</button>
+        <button data-key="ultimate" class="ultimate" aria-label="终结技">神</button>
+      </div>
+    </nav>
+  </main>
+  <script type="module" src="./src/game.js"></script>
+</body>
+</html>
