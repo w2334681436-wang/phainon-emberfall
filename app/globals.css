@@ -361,6 +361,49 @@ footer {
   color: var(--ember);
   font-size: 13px;
 }
+.boss-hud {
+  position: absolute;
+  z-index: 7;
+  top: 18px;
+  left: 50%;
+  width: min(48vw, 520px);
+  transform: translateX(-50%);
+  text-align: center;
+  filter: drop-shadow(0 4px 10px #000);
+}
+.boss-hud small {
+  display: block;
+  color: #b9b7b5;
+  font: 8px Arial, sans-serif;
+  letter-spacing: 0.35em;
+}
+.boss-hud b {
+  display: block;
+  margin: 2px 0 5px;
+  color: #fff;
+  font-size: 18px;
+  letter-spacing: 0.45em;
+}
+.boss-hud > div {
+  height: 12px;
+  padding: 2px;
+  border: 1px solid #e5e2dc;
+  background: #050609dd;
+  clip-path: polygon(2% 0, 100% 0, 98% 100%, 0 100%);
+}
+.boss-hud i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #35333b, #f4f4f1 50%, #aeb6c8);
+  box-shadow: 0 0 16px #fff;
+  transition: width 0.16s linear;
+}
+.boss-hud em {
+  display: block;
+  margin-top: 2px;
+  color: #9d9ca1;
+  font: 8px Arial, sans-serif;
+}
 .ult {
   position: absolute;
   left: 28px;
@@ -595,6 +638,11 @@ footer {
     top: 8px;
     right: 10px;
     font-size: 15px;
+  }
+  .boss-hud {
+    top: 5px;
+    width: 42vw;
+    transform: translateX(-50%) scale(0.82);
   }
   .ult {
     bottom: 76px;
