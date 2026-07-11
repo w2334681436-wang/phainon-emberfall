@@ -337,7 +337,7 @@ export default function Game() {
       }
       draw(
         ctx,
-        c,
+        c!,
         p,
         enemies,
         fx,
