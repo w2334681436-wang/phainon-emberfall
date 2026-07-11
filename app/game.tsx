@@ -15,6 +15,25 @@ type Enemy = {
   facing: number;
 };
 type Fx = { x: number; y: number; life: number; kind: string };
+type Meteor = {
+  x: number;
+  life: number;
+  max: number;
+  large: boolean;
+};
+
+const GROUND_Y = 485;
+const ANIM_FRAME_TICKS = 6; // 60Hz logic -> 10fps sprite animation
+const NORMAL_ANCHOR_Y: Record<number, number[]> = {
+  0: [0, 0, 0, 0, 0, 8, 8, 8, 8, 8],
+  2: [0, 3, 6, 3, 0, 6, 8, 11, 14, 11],
+  4: [0, 1, 1, 1, 1, 1, 27, 24, 24, 0],
+};
+const GOD_ANCHOR_Y: Record<number, number[]> = {
+  2: [0, 0, 0, 0, 12, 25, 25, 25, 25, 24],
+  4: [2, 0, 9, 9, 0, 2, 7, 11, 10, 2],
+  6: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+};
 
 const CHAPTERS = ["焦土边境", "熔炉回廊", "毁灭王庭"];
 const DIALOGUE = [
@@ -83,10 +102,11 @@ export default function Game() {
       last = performance.now(),
       spawn = 0,
       levelTime = 0,
-      shake = 0;
+      shake = 0,
+      uiLast = 0;
     let p = {
       x: 170,
-      y: 410,
+      y: GROUND_Y,
       vx: 0,
       vy: 0,
       hp: 100,
@@ -100,11 +120,13 @@ export default function Game() {
       skill: 0,
       trans: 0,
       transforming: 0,
+      skillStep: -1,
       combo: 0,
       score: 0,
     };
     let enemies: Enemy[] = [];
     let fx: Fx[] = [];
+    let meteors: Meteor[] = [];
     const bg = new Image();
     bg.src = "https://phainon-emberfall.opal-mint-9707.chatgpt.site/assets/hell-battlefield.png";
     const heroNormal = new Image();
@@ -134,8 +156,23 @@ export default function Game() {
       if (landed) {
         p.combo++;
         p.score += 50 * p.combo;
-        p.ult = Math.min(100, p.ult + (p.trans ? 4 : 14));
+        if (!p.trans) p.ult = Math.min(100, p.ult + 14);
         p.mp = Math.min(100, p.mp + 8);
+      }
+    };
+    const meteorHit = (x: number, power: number, radius: number) => {
+      let landed = false;
+      enemies.forEach((e) => {
+        if (Math.abs(e.x - x) <= radius) {
+          e.hp -= power;
+          e.hit = 10;
+          e.vx = Math.sign(e.x - x || 1) * 5;
+          landed = true;
+        }
+      });
+      if (landed) {
+        p.combo++;
+        p.score += power * 8;
       }
     };
     const press = (code: string) => {
@@ -165,29 +202,25 @@ export default function Game() {
         fx.push({ x: p.x, y: p.y, life: 12, kind: "dash" });
       }
       if (press("KeyJ") && p.atk <= 0 && p.transforming <= 0) {
-        p.atk = 30;
+        p.atk = 60;
         hit(p.trans ? 34 : 18, p.trans ? 165 : 115);
       }
       if (press("KeyK") && p.skill <= 0 && p.mp >= 20 && p.transforming <= 0) {
-        p.skill = p.trans > 0 ? 90 : 30;
+        p.skill = p.trans > 0 ? 150 : 60;
+        p.skillStep = -1;
         p.mp -= 20;
         if (p.trans > 0) {
-          hit(32, 280);
-          window.setTimeout(() => {
-            hit(95, 430);
-            shake = 20;
-            fx.push({ x: p.x + p.face * 280, y: 385, life: 34, kind: "boom" });
-          }, 1050);
+          setNotice("天陨劫火 · 全域轰炸");
+          window.setTimeout(() => setNotice(""), 1100);
         } else hit(38, 185);
-        p.ult = Math.min(100, p.ult + 24);
+        if (!p.trans) p.ult = Math.min(100, p.ult + 24);
         shake = 8;
       }
       const wantsUlt = press("KeyI") || press("KeyU");
-      if (wantsUlt && !p.trans) {
+      if (wantsUlt && !p.trans && p.transforming <= 0) {
         if (p.ult >= 100) {
-          p.ult = 0;
-          p.trans = 720;
-          p.transforming = 30;
+          p.ult = 100;
+          p.transforming = 60;
           p.hp = Math.min(100, p.hp + 30);
           shake = 18;
           fx.push({ x: p.x, y: p.y - 80, life: 80, kind: "transform" });
@@ -201,24 +234,49 @@ export default function Game() {
       p.x += p.vx * dt;
       p.y += p.vy * dt;
       p.vy += 0.65 * dt;
-      if (p.y >= 410) {
-        p.y = 410;
+      if (p.y >= GROUND_Y) {
+        p.y = GROUND_Y;
         p.vy = 0;
         p.ground = true;
       }
       p.x = Math.max(55, Math.min(930, p.x));
-      p.inv--;
-      p.hurt--;
-      p.atk--;
-      p.skill--;
-      p.trans--;
-      p.transforming--;
+      p.inv = Math.max(0, p.inv - dt);
+      p.hurt = Math.max(0, p.hurt - dt);
+      p.atk = Math.max(0, p.atk - dt);
+      p.skill = Math.max(0, p.skill - dt);
       if (p.transforming > 0) {
+        p.transforming = Math.max(0, p.transforming - dt);
         p.vx = 0;
         p.vy = 0;
+        p.y = GROUND_Y;
+        if (p.transforming === 0) p.trans = 1;
+      } else if (p.trans) {
+        p.ult = Math.max(0, p.ult - 0.11 * dt);
+        if (p.ult === 0) {
+          p.trans = 0;
+          p.skill = 0;
+          meteors = [];
+          setNotice("火种耗尽 · 返回白厄");
+          window.setTimeout(() => setNotice(""), 1000);
+        }
       }
       p.mp = Math.min(100, p.mp + 0.11 * dt);
-      p.ult = Math.min(100, p.ult + (p.trans ? 0 : 0.018 * dt));
+      if (!p.trans && p.transforming <= 0)
+        p.ult = Math.min(100, p.ult + 0.018 * dt);
+
+      if (p.trans && p.skill > 0) {
+        const step = Math.min(13, Math.floor((150 - p.skill) / 10));
+        if (step > p.skillStep) {
+          p.skillStep = step;
+          const large = step === 13;
+          const x = large ? 500 : 70 + Math.random() * 860;
+          meteors.push({ x, life: large ? 66 : 46, max: large ? 66 : 46, large });
+          meteorHit(x, large ? 110 : 28, large ? 260 : 105);
+          shake = large ? 24 : 7;
+        }
+      }
+      meteors.forEach((m) => (m.life = Math.max(0, m.life - dt)));
+      meteors = meteors.filter((m) => m.life > 0);
       spawn -= dt;
       if (spawn <= 0 && levelTime < 1850) {
         let boss = levelTime > 1450 && enemies.every((e) => !e.boss);
@@ -227,7 +285,7 @@ export default function Game() {
           let hp = boss ? 720 : kind > 3 ? 120 : 45;
           enemies.push({
             x: boss ? 830 : 990,
-            y: 410,
+            y: GROUND_Y,
             vx: boss ? -1 : -1.2 - Math.random(),
             hp,
             max: hp,
@@ -260,7 +318,7 @@ export default function Game() {
         if (e.hp <= 0) {
           p.score += e.boss ? 5000 : 250;
           p.mp = Math.min(100, p.mp + 18);
-          p.ult = Math.min(100, p.ult + 12);
+          if (!p.trans) p.ult = Math.min(100, p.ult + 12);
           fx.push({ x: e.x, y: e.y - 45, life: 35, kind: "boom" });
           return false;
         }
@@ -283,6 +341,7 @@ export default function Game() {
         p,
         enemies,
         fx,
+        meteors,
         bg,
         heroNormal,
         heroGod,
@@ -291,16 +350,18 @@ export default function Game() {
         shake,
         levelTime,
       );
-      if (Math.floor(t / 120) % 2 === 0)
+      if (t - uiLast >= 100) {
+        uiLast = t;
         setUi({
           hp: p.hp,
           mp: p.mp,
           ult: p.ult,
           score: p.score,
           combo: p.combo,
-          transform: p.trans > 0,
+          transform: p.trans > 0 || p.transforming > 0,
           boss: enemies.find((e) => e.boss)?.hp || 0,
         });
+      }
       raf = requestAnimationFrame(frame);
     }
     raf = requestAnimationFrame(frame);
@@ -409,7 +470,7 @@ export default function Game() {
               <b>{ui.transform ? "神厄降世" : "救世之火"}</b>
               <small>
                 {ui.transform
-                  ? "强化形态持续中"
+                  ? `神厄能量 ${Math.ceil(ui.ult)}% · 持续消耗中`
                   : ui.ult >= 100
                     ? "按 I 释放"
                     : "攻击积攒火种"}
@@ -446,14 +507,15 @@ export default function Game() {
         )}{" "}
         {mode === "won" && (
           <div className="result overlay">
-            <span>✦</span>
-            <small>毁灭王庭 · 已攻略</small>
+            <div className="clear-seal">✦</div>
+            <small>STAGE CLEAR · 关卡通关</small>
             <h2>黎明，终将抵达。</h2>
             <p>
               绝灭大君·焚风的投影已被击破
               <br />
-              最终得分　<b>{ui.score}</b>
+              最终得分　<b>{ui.score}</b>　·　最高连击　<b>{ui.combo}</b>
             </p>
+            <div className="clear-rank">S</div>
             <button
               className="start"
               onClick={() => {
@@ -461,7 +523,7 @@ export default function Game() {
                 setMode("menu");
               }}
             >
-              返回远征记录
+              继续逐火远征
             </button>
           </div>
         )}
@@ -554,8 +616,16 @@ function drawAtlas(
   const sh = image.naturalHeight / totalRows;
   const col = f % 5;
   const row = pair + Math.floor(f / 5);
+  const anchorTable = image.src.includes("phainon-normal")
+    ? NORMAL_ANCHOR_Y
+    : image.src.includes("phainon-god")
+      ? GOD_ANCHOR_Y
+      : undefined;
+  const anchorOffset = (anchorTable?.[pair]?.[f] || 0) * (h / 200);
+  const dx = Math.round(x);
+  const dy = Math.round(y + anchorOffset);
   ctx.save();
-  ctx.translate(x + (flip ? w : 0), y);
+  ctx.translate(dx + (flip ? w : 0), dy);
   ctx.scale(flip ? -1 : 1, 1);
   ctx.drawImage(image, col * sw, row * sh, sw, sh, 0, 0, w, h);
   ctx.restore();
@@ -568,6 +638,7 @@ function draw(
   p: any,
   enemies: Enemy[],
   fx: Fx[],
+  meteors: Meteor[],
   bg: HTMLImageElement,
   heroNormal: HTMLImageElement,
   heroGod: HTMLImageElement,
@@ -577,7 +648,11 @@ function draw(
   time: number,
 ) {
   ctx.save();
-  ctx.translate((Math.random() - 0.5) * shake, (Math.random() - 0.5) * shake);
+  // Deterministic camera impulse avoids random per-frame sprite jitter.
+  ctx.translate(
+    Math.round(Math.sin(time * 1.73) * shake * 0.42),
+    Math.round(Math.cos(time * 2.11) * shake * 0.24),
+  );
   ctx.fillStyle = "#12090b";
   ctx.fillRect(0, 0, c.width, c.height);
   if (bg.complete) ctx.drawImage(bg, 0, 0, c.width, c.height);
@@ -600,9 +675,10 @@ function draw(
   ctx.fillStyle = "#742617";
   ctx.fillRect(0, 485, 1000, 5);
   enemies.forEach((e) => {
+    const ex = Math.round(e.x);
     ctx.save();
     if (e.facing < 0) {
-      ctx.translate(e.x * 2, 0);
+      ctx.translate(ex * 2, 0);
       ctx.scale(-1, 1);
     }
     if (e.hit > 0) ctx.globalCompositeOperation = "screen";
@@ -619,29 +695,29 @@ function draw(
         row * sh,
         sw,
         sh,
-        e.x - 55 * scale,
+        ex - 55 * scale,
         e.y - 135 * scale,
         110 * scale,
         140 * scale,
       );
     } else {
       ctx.fillStyle = e.boss ? "#f05a24" : "#351a24";
-      ctx.fillRect(e.x - 25 * scale, e.y - 70 * scale, 50 * scale, 70 * scale);
+      ctx.fillRect(ex - 25 * scale, e.y - 70 * scale, 50 * scale, 70 * scale);
       ctx.fillStyle = "#ffc15b";
-      ctx.fillRect(e.x - 12 * scale, e.y - 55 * scale, 8, 8);
+      ctx.fillRect(ex - 12 * scale, e.y - 55 * scale, 8, 8);
     }
     ctx.restore();
     ctx.fillStyle = "#1b0909";
-    ctx.fillRect(e.x - 40 * scale, e.y - 115 * scale, 80 * scale, 6);
+    ctx.fillRect(ex - 40 * scale, e.y - 115 * scale, 80 * scale, 6);
     ctx.fillStyle = e.boss ? "#f45a24" : "#e9b45f";
     ctx.fillRect(
-      e.x - 40 * scale,
+      ex - 40 * scale,
       e.y - 115 * scale,
       80 * scale * (e.hp / e.max),
       6,
     );
   });
-  const frame20 = Math.floor(time / 3) % 10;
+  const idleFrame = Math.floor(time / ANIM_FRAME_TICKS) % 10;
   const flip = p.face < 0;
   ctx.save();
   ctx.globalAlpha = 0.34;
@@ -652,57 +728,60 @@ function draw(
   ctx.restore();
   let drawn = false;
   if (p.transforming > 0) {
-    const f = Math.max(0, Math.min(9, Math.floor((30 - p.transforming) / 3)));
+    const f = Math.max(
+      0,
+      Math.min(9, Math.floor((60 - p.transforming) / ANIM_FRAME_TICKS)),
+    );
     drawn = drawAtlas(
       ctx,
       heroGod,
       0,
       f,
       8,
-      p.x - 95,
-      p.y - 200,
-      200,
-      200,
+      Math.round(p.x - 105),
+      GROUND_Y - 220,
+      220,
+      220,
       flip,
     );
   } else if (p.trans > 0) {
     const pair = p.skill > 0 ? 6 : p.atk > 0 ? 4 : 2;
     const f =
       p.skill > 0
-        ? Math.floor((90 - p.skill) / 3) % 10
+        ? Math.floor((150 - p.skill) / 15) % 10
         : p.atk > 0
-          ? Math.floor((30 - p.atk) / 3)
-          : frame20;
+          ? Math.floor((60 - p.atk) / ANIM_FRAME_TICKS)
+          : idleFrame;
     drawn = drawAtlas(
       ctx,
       heroGod,
       pair,
       f,
       8,
-      p.x - 105,
-      p.y - 220,
+      Math.round(p.x - 110),
+      GROUND_Y - 220,
       220,
-      205,
+      220,
       flip,
     );
   } else {
     const pair = p.skill > 0 || p.atk > 0 ? 4 : Math.abs(p.vx) > 1 ? 2 : 0;
     const f =
       p.skill > 0
-        ? Math.floor((30 - p.skill) / 3)
+        ? Math.floor((60 - p.skill) / ANIM_FRAME_TICKS)
         : p.atk > 0
-          ? Math.floor((30 - p.atk) / 3)
-          : frame20;
+          ? Math.floor((60 - p.atk) / ANIM_FRAME_TICKS)
+          : idleFrame;
     drawn = drawAtlas(
       ctx,
       heroNormal,
       pair,
       f,
       6,
-      p.x - 75,
-      p.y - 155,
+      Math.round(p.x - 80),
+      GROUND_Y - 160,
       160,
-      155,
+      160,
       flip,
     );
   }
@@ -714,7 +793,7 @@ function draw(
   }
   if (vfx.complete && vfx.naturalWidth) {
     if (p.atk > 0) {
-      const f = Math.floor((30 - p.atk) / 3);
+      const f = Math.floor((60 - p.atk) / ANIM_FRAME_TICKS);
       const pair = p.trans > 0 ? 4 : 0;
       const w = p.trans > 0 ? 360 : 260,
         h = p.trans > 0 ? 230 : 160;
@@ -722,34 +801,30 @@ function draw(
       drawAtlas(ctx, vfx, pair, f, 10, x, p.y - h / 2 - 55, w, h, flip);
     }
     if (p.skill > 0 && p.trans <= 0) {
-      const f = Math.floor((30 - p.skill) / 3),
+      const f = Math.floor((60 - p.skill) / ANIM_FRAME_TICKS),
         w = 400,
         h = 230;
       const x = p.face > 0 ? p.x - 20 : p.x - w + 20;
       drawAtlas(ctx, vfx, 2, f, 10, x, p.y - h / 2 - 55, w, h, flip);
     }
-    if (p.skill > 0 && p.trans > 0) {
-      const progress = Math.max(0, Math.min(1, (90 - p.skill) / 90));
-      const giant = progress > 0.68;
-      const f = giant
-        ? Math.floor(((progress - 0.68) / 0.32) * 10)
-        : Math.floor((progress / 0.68) * 10) % 10;
-      const w = giant ? 600 : 520,
-        h = giant ? 500 : 390;
-      const target = p.x + p.face * 280;
+    meteors.forEach((meteor) => {
+      const progress = 1 - meteor.life / meteor.max;
+      const f = Math.min(9, Math.floor(progress * 10));
+      const w = meteor.large ? 620 : 300,
+        h = meteor.large ? 520 : 330;
       drawAtlas(
         ctx,
         vfx,
-        giant ? 8 : 6,
+        meteor.large ? 8 : 6,
         f,
         10,
-        target - w / 2,
+        Math.round(meteor.x - w / 2),
         485 - h,
         w,
         h,
         false,
       );
-    }
+    });
   }
   fx.forEach((f) => {
     ctx.save();
