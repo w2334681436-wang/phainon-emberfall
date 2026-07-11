@@ -1,0 +1,1 @@
+将素材包中的 `hell-battlefield.png` 上传到本目录。目标路径：`public/assets/backgrounds/hell-battlefield.png`。
