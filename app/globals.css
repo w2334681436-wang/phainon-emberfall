@@ -15,6 +15,7 @@ button {
 }
 .game-shell {
   height: 100dvh !important;
+  --game-chrome: 92px;
   padding: env(safe-area-inset-top) env(safe-area-inset-right)
     env(safe-area-inset-bottom) env(safe-area-inset-left);
 }
@@ -142,8 +143,10 @@ footer {
 }
 .viewport {
   position: relative;
-  width: min(100%, 1400px);
-  height: 100%;
+  width: min(100%, calc((100dvh - var(--game-chrome)) * 1.785714));
+  height: auto;
+  max-height: 100%;
+  aspect-ratio: 1000 / 560;
   margin: auto;
   overflow: hidden;
   background: #14090b;
@@ -169,7 +172,7 @@ footer {
       rgba(9, 6, 7, 0.87) 42%,
       rgba(9, 6, 7, 0.08) 75%
     ),
-    url("/assets/hell-battlefield.png") center/cover;
+    url("https://phainon-emberfall.opal-mint-9707.chatgpt.site/assets/hell-battlefield.png") center/cover;
 }
 .menu:after {
   content: "白";
@@ -464,6 +467,26 @@ footer {
 .result p b {
   color: var(--ember);
 }
+.clear-seal {
+  display: grid;
+  place-items: center;
+  width: 76px;
+  height: 76px;
+  border: 1px solid var(--gold);
+  color: var(--gold);
+  font-size: 40px;
+  transform: rotate(45deg);
+  box-shadow: 0 0 40px #f0c97855;
+}
+.clear-seal::first-letter {
+  display: inline-block;
+}
+.clear-rank {
+  margin: 4px 0 18px;
+  color: #ffd56e;
+  font: italic 700 58px Georgia, serif;
+  text-shadow: 0 0 24px #ff6b2e;
+}
 .help {
   position: absolute;
   z-index: 30;
@@ -512,6 +535,7 @@ footer {
 @media (pointer: coarse), (max-height: 650px) and (max-width: 1100px) {
   .game-shell {
     grid-template-rows: 42px 1fr 0;
+    --game-chrome: 42px;
   }
   footer {
     display: none;
