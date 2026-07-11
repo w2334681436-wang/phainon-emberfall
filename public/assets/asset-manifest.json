@@ -1,0 +1,49 @@
+{
+  "version": "1.0",
+  "fps": 20,
+  "assets": {
+    "background": {
+      "path": "/assets/backgrounds/hell-battlefield.png",
+      "size": [1000, 560]
+    },
+    "normalCharacter": {
+      "path": "/assets/characters/phainon-normal-v3.png",
+      "grid": { "columns": 5, "rows": 6 },
+      "pairs": {
+        "0": "idle",
+        "2": "run",
+        "4": "attack-body"
+      }
+    },
+    "godCharacter": {
+      "path": "/assets/characters/phainon-god-v3.png",
+      "grid": { "columns": 5, "rows": 8 },
+      "pairs": {
+        "0": "transform",
+        "2": "hover-idle",
+        "4": "red-rift-attack-body",
+        "6": "meteor-cast-body"
+      }
+    },
+    "enemyAtlas": {
+      "path": "/assets/enemies/enemy-sprites-v2.png",
+      "grid": { "columns": 8, "rows": 3 },
+      "rows": {
+        "0": "mob",
+        "1": "elite",
+        "2": "boss"
+      }
+    },
+    "combatVfx": {
+      "path": "/assets/effects/combat-vfx-v3.png",
+      "grid": { "columns": 5, "rows": 10 },
+      "pairs": {
+        "0": "yellow-sword-wave",
+        "2": "blue-large-sword-wave",
+        "4": "red-dimensional-rift",
+        "6": "meteor-rain",
+        "8": "giant-meteor"
+      }
+    }
+  }
+}
