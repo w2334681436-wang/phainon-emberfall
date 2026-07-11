@@ -1,0 +1,1 @@
+将素材包中的 `phainon-normal-v3.png` 与 `phainon-god-v3.png` 上传到本目录。文件名不能修改。
