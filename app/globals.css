@@ -133,6 +133,9 @@ footer {
   display: flex;
   gap: 8px;
 }
+.touch-settings-trigger {
+  display: none;
+}
 .top-actions button,
 .help button {
   background: #181315;
@@ -431,6 +434,17 @@ footer {
   background: #151011;
   color: var(--gold);
   font-size: 23px;
+  position: relative;
+  line-height: 1;
+}
+.ult > div span em {
+  position: absolute;
+  left: 50%;
+  bottom: 6px;
+  transform: translateX(-50%);
+  color: #d6b979;
+  font: normal 7px Arial, sans-serif;
+  letter-spacing: 0;
 }
 .ult > div.ready {
   animation: pulse 1s infinite;
@@ -544,7 +558,8 @@ footer {
   font: 11px Arial;
   color: #baa99b;
 }
-.mobile {
+.mobile-controls,
+.control-settings {
   display: none;
 }
 .game-notice {
@@ -591,39 +606,127 @@ footer {
     display: none;
   }
   .viewport {
-    width: 100%;
-    height: 100%;
+    width: min(100%, calc((100dvh - var(--game-chrome)) * 1.785714));
+    height: auto;
+    max-height: 100%;
+    aspect-ratio: 1000 / 560;
   }
-  .mobile {
-    display: flex;
+  .mobile-controls {
+    display: block;
     position: absolute;
     z-index: 20;
-    left: max(12px, env(safe-area-inset-left));
-    right: max(12px, env(safe-area-inset-right));
-    bottom: max(10px, env(safe-area-inset-bottom));
-    justify-content: space-between;
-    align-items: end;
+    inset: 0;
     pointer-events: none;
   }
-  .mobile button {
+  .mobile-controls button {
     pointer-events: auto;
-    width: clamp(44px, 7.5vw, 66px);
-    height: clamp(44px, 7.5vw, 66px);
+    width: clamp(46px, 7.2vw, 66px);
+    height: clamp(46px, 7.2vw, 66px);
     border-radius: 50%;
     border: 2px solid #9b6849;
-    background: #120d0ee0;
+    background: rgba(18, 13, 14, var(--controls-opacity));
     color: #f0c978;
     font-weight: 800;
     box-shadow: 0 4px 16px #0009;
     touch-action: none;
+    backdrop-filter: blur(3px);
   }
-  .mobile button:nth-last-child(-n + 3) {
-    background: #32130fe8;
+  .move-pad {
+    position: absolute;
+    left: max(18px, env(safe-area-inset-left));
+    bottom: max(15px, env(safe-area-inset-bottom));
+    display: flex;
+    gap: 12px;
+    transform: translate(var(--move-x), var(--move-y));
   }
-  .mobile .ultimate-ready {
-    background: #8c2f1f;
+  .action-fan {
+    position: absolute;
+    right: max(18px, env(safe-area-inset-right));
+    bottom: max(10px, env(safe-area-inset-bottom));
+    width: clamp(255px, 34vw, 355px);
+    height: clamp(145px, 22vw, 205px);
+    transform: translate(var(--action-x), var(--action-y));
+  }
+  .action-fan button {
+    position: absolute;
+    background: rgba(50, 19, 15, var(--controls-opacity));
+  }
+  .action-fan .jump {
+    left: 0;
+    bottom: 0;
+  }
+  .action-fan .dodge {
+    left: 18%;
+    bottom: 44%;
+  }
+  .action-fan .attack {
+    left: 44%;
+    top: 0;
+  }
+  .action-fan .skill {
+    right: 16%;
+    bottom: 43%;
+  }
+  .action-fan .ultimate {
+    right: 0;
+    bottom: 0;
+  }
+  .action-fan .ultimate-ready {
+    background: rgba(140, 47, 31, 0.82);
     border-color: #ffd887;
     animation: pulse 0.7s infinite;
+  }
+  .touch-settings-trigger {
+    display: inline-block;
+  }
+  .control-settings {
+    position: absolute;
+    z-index: 45;
+    display: grid;
+    gap: 8px;
+    top: 10px;
+    right: max(12px, env(safe-area-inset-right));
+    width: min(300px, 44vw);
+    max-height: calc(100% - 20px);
+    overflow: auto;
+    padding: 14px 16px;
+    border: 1px solid #9b6849;
+    background: rgba(13, 9, 10, 0.94);
+    box-shadow: 0 14px 48px #000;
+    backdrop-filter: blur(10px);
+  }
+  .control-settings-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    color: var(--gold);
+  }
+  .control-settings-head button {
+    border: 0;
+    background: none;
+    font-size: 22px;
+  }
+  .control-settings label {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 3px 8px;
+    color: #cbb9a8;
+    font: 10px Arial, sans-serif;
+  }
+  .control-settings input {
+    grid-column: 1 / 3;
+    accent-color: #d66a3c;
+    width: 100%;
+  }
+  .control-settings output {
+    color: #f0c978;
+  }
+  .reset-controls {
+    padding: 7px 10px;
+    border: 1px solid #6f4939;
+    background: #251516;
+    color: #e6c796;
+    font-size: 10px;
   }
   .skills {
     display: none;
@@ -665,7 +768,7 @@ footer {
 }
 @media (max-width: 700px) {
   .game-shell {
-    grid-template-rows: 48px 1fr 22px;
+    grid-template-rows: 48px 1fr 0;
   }
   .brand small,
   .chapter,
@@ -715,25 +818,6 @@ footer {
     transform: scale(0.75);
     transform-origin: left bottom;
   }
-  .mobile {
-    display: flex;
-    position: absolute;
-    z-index: 8;
-    left: 8px;
-    right: 8px;
-    bottom: 8px;
-    justify-content: space-between;
-    pointer-events: none;
-  }
-  .mobile button {
-    pointer-events: auto;
-    width: 44px;
-    height: 44px;
-    border-radius: 50%;
-    border: 1px solid #a36d4d;
-    background: #160e10cc;
-    color: #f0c978;
-  }
   .story {
     padding: 4vh;
   }
@@ -746,8 +830,5 @@ footer {
   }
   .dialog p {
     font-size: 13px;
-  }
-  .viewport {
-    height: 100%;
   }
 }

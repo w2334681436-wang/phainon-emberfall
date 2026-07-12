@@ -35,11 +35,41 @@ type BossFx = {
   vx?: number;
   hit?: boolean;
 };
+type Player = {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  hp: number;
+  mp: number;
+  ult: number;
+  face: number;
+  ground: boolean;
+  inv: number;
+  hurt: number;
+  atk: number;
+  skill: number;
+  dodge: number;
+  trans: number;
+  transforming: number;
+  skillStep: number;
+  combo: number;
+  score: number;
+};
 
 const GROUND_Y = 485;
 const ANIM_FRAME_TICKS = 6; // 60Hz logic -> 10fps sprite animation
+const NORMAL_ATTACK_RANGE = 230;
+const GOD_ATTACK_RANGE = 400;
 const MINIONS_TO_BOSS = 12;
 const BOSS_MAX_HP = 1600;
+const DEFAULT_CONTROLS = {
+  opacity: 0.56,
+  moveX: 0,
+  moveY: 0,
+  actionX: 0,
+  actionY: 0,
+};
 const NORMAL_ANCHOR_Y: Record<number, number[]> = {
   0: [0, 0, 0, 0, 0, 8, 8, 8, 8, 8],
   2: [0, 3, 6, 3, 0, 6, 8, 11, 14, 11],
@@ -52,7 +82,7 @@ const GOD_ANCHOR_Y: Record<number, number[]> = {
 };
 
 const GOD_ANCHOR_X: Record<number, number[]> = {
-  // Mild center compensation: stabilizes the body without cancelling sword motion.
+  // Keep the body center stable without cancelling the intended sword motion.
   2: [-6, 0, 1, -3, 8, -4, 0, 3, -2, 8],
   4: [-7, -8, 7, 7, -8, -7, 0, 7, 8, -7],
   6: [-8, 5, 8, 8, 8, 5, -8, 5, 8, 8],
@@ -85,6 +115,21 @@ export default function Game() {
   const [notice, setNotice] = useState("");
   const [muted, setMuted] = useState(false),
     [help, setHelp] = useState(false);
+  const [controlSettings, setControlSettings] = useState(false);
+  const [controls, setControls] = useState(() => {
+    if (typeof window === "undefined") return DEFAULT_CONTROLS;
+    try {
+      const stored = localStorage.getItem("phainon-touch-controls");
+      return stored ? { ...DEFAULT_CONTROLS, ...JSON.parse(stored) } : DEFAULT_CONTROLS;
+    } catch {}
+    return DEFAULT_CONTROLS;
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem("phainon-touch-controls", JSON.stringify(controls));
+    } catch {}
+  }, [controls]);
   const start = () => {
     setDialog(0);
     setMode("story");
@@ -129,7 +174,7 @@ export default function Game() {
       levelTime = 0,
       shake = 0,
       uiLast = 0;
-    let p = {
+    const p: Player = {
       x: 170,
       y: GROUND_Y,
       vx: 0,
@@ -143,6 +188,7 @@ export default function Game() {
       hurt: 0,
       atk: 0,
       skill: 0,
+      dodge: 0,
       trans: 0,
       transforming: 0,
       skillStep: -1,
@@ -165,12 +211,16 @@ export default function Game() {
     heroGod.src = "https://phainon-emberfall.opal-mint-9707.chatgpt.site/assets/phainon-god-v3.png";
     const heroJump = new Image();
     heroJump.src = "https://phainon-emberfall.opal-mint-9707.chatgpt.site/assets/phainon-jump-v4.png";
+    const heroRun = new Image();
+    heroRun.src = "/assets/phainon-run-v6.png";
+    const heroDodge = new Image();
+    heroDodge.src = "/assets/phainon-dodge-v6.png";
     const foes = new Image();
     foes.src = "https://phainon-emberfall.opal-mint-9707.chatgpt.site/assets/enemy-sprites-v2.png";
     const vfx = new Image();
     vfx.src = "https://phainon-emberfall.opal-mint-9707.chatgpt.site/assets/combat-vfx-v3.png";
     const bossSheet = new Image();
-    bossSheet.src = "https://phainon-emberfall.opal-mint-9707.chatgpt.site/assets/fenfeng-boss-v4.png";
+    bossSheet.src = "/assets/fenfeng-boss-v6.png";
     const whiteHole = new Image();
     whiteHole.src = "https://phainon-emberfall.opal-mint-9707.chatgpt.site/assets/white-hole-battlefield-v4.png";
     const hit = (power: number, range: number) => {
@@ -230,7 +280,7 @@ export default function Game() {
       fx.push({ x: p.x, y: p.y - 50, life: 18, kind: "hurt" });
     };
     function frame(t: number) {
-      let dt = Math.min(2, (t - last) / 16.67);
+      const dt = Math.min(2, (t - last) / 16.67);
       last = t;
       levelTime += dt;
       const left = keys.current.KeyA || keys.current.ArrowLeft,
@@ -246,11 +296,15 @@ export default function Game() {
       if (press("ShiftLeft") || press("KeyL")) {
         p.vx = p.face * 16;
         p.inv = 22;
+        p.dodge = 54;
         fx.push({ x: p.x, y: p.y, life: 12, kind: "dash" });
       }
       if (press("KeyJ") && p.atk <= 0 && p.transforming <= 0) {
         p.atk = 60;
-        hit(p.trans ? 34 : 18, p.trans ? 165 : 95);
+        hit(
+          p.trans ? 34 : 18,
+          p.trans ? GOD_ATTACK_RANGE : NORMAL_ATTACK_RANGE,
+        );
       }
       if (press("KeyK") && p.skill <= 0 && p.mp >= 20 && p.transforming <= 0) {
         p.skill = p.trans > 0 ? 150 : 60;
@@ -291,6 +345,7 @@ export default function Game() {
       p.hurt = Math.max(0, p.hurt - dt);
       p.atk = Math.max(0, p.atk - dt);
       p.skill = Math.max(0, p.skill - dt);
+      p.dodge = Math.max(0, p.dodge - dt);
       if (p.transforming > 0) {
         p.transforming = Math.max(0, p.transforming - dt);
         p.vx = 0;
@@ -490,6 +545,8 @@ export default function Game() {
         heroNormal,
         heroGod,
         heroJump,
+        heroRun,
+        heroDodge,
         foes,
         bossSheet,
         vfx,
@@ -498,12 +555,12 @@ export default function Game() {
         bossArena,
         bossIntro,
       );
-      if (t - uiLast >= 100) {
+      if (t - uiLast >= 34) {
         uiLast = t;
         setUi({
-          hp: p.hp,
-          mp: p.mp,
-          ult: p.ult,
+          hp: Math.max(0, Math.min(100, p.hp)),
+          mp: Math.max(0, Math.min(100, p.mp)),
+          ult: Math.max(0, Math.min(100, p.ult)),
           score: p.score,
           combo: p.combo,
           transform: p.trans > 0 || p.transforming > 0,
@@ -525,6 +582,9 @@ export default function Game() {
         keys.current[code] = false;
       }, 160);
   };
+  const setControl = (key: keyof typeof controls, value: number) =>
+    setControls((current) => ({ ...current, [key]: value }));
+  const energy = Math.max(0, Math.min(100, ui.ult));
   return (
     <main className="game-shell">
       <div className="topbar">
@@ -542,6 +602,13 @@ export default function Game() {
           <button onClick={() => setHelp(!help)}>键位</button>
           <button aria-label="声音" onClick={() => setMuted(!muted)}>
             {muted ? "◌" : "◉"}
+          </button>
+          <button
+            className="touch-settings-trigger"
+            aria-label="触控设置"
+            onClick={() => setControlSettings(!controlSettings)}
+          >
+            ⚙
           </button>
           <button onClick={() => setMode("paused")}>Ⅱ</button>
         </div>
@@ -622,15 +689,18 @@ export default function Game() {
               <div
                 className={ui.ult >= 100 ? "ready" : ""}
                 style={
-                  { "--charge": `${ui.ult * 3.6}deg` } as React.CSSProperties
+                  { "--charge": `${energy * 3.6}deg` } as React.CSSProperties
                 }
               >
-                <span>{ui.transform ? "神" : "火"}</span>
+                <span>
+                  {ui.transform ? "神" : "火"}
+                  <em>{Math.round(energy)}%</em>
+                </span>
               </div>
               <b>{ui.transform ? "神厄降世" : "救世之火"}</b>
               <small>
                 {ui.transform
-                  ? `神厄能量 ${Math.ceil(ui.ult)}% · 持续消耗中`
+                  ? `神厄能量 ${Math.round(energy)}% · 持续消耗中`
                   : ui.ult >= 100
                     ? "按 I 释放"
                     : "攻击积攒火种"}
@@ -697,37 +767,90 @@ export default function Game() {
             <button onClick={() => setHelp(false)}>知道了</button>
           </div>
         )}
-        <div className="mobile">
-          <button
-            onPointerDown={() => touch("KeyA", true)}
-            onPointerUp={() => touch("KeyA", false)}
-            onPointerCancel={() => touch("KeyA", false)}
-          >
-            ◀
-          </button>
-          <button
-            onPointerDown={() => touch("KeyD", true)}
-            onPointerUp={() => touch("KeyD", false)}
-            onPointerCancel={() => touch("KeyD", false)}
-          >
-            ▶
-          </button>
-          <button onPointerDown={() => touch("Space")}>跃</button>
-          <button onPointerDown={() => touch("ShiftLeft")}>闪</button>
-          <button onPointerDown={() => touch("KeyJ")}>斩</button>
-          <button onPointerDown={() => touch("KeyK")}>技</button>
-          <button
-            className={ui.ult >= 100 ? "ultimate-ready" : ""}
-            onPointerDown={() => touch("KeyI")}
-          >
-            神
-          </button>
+        <div
+          className="mobile-controls"
+          style={
+            {
+              "--controls-opacity": controls.opacity,
+              "--move-x": `${controls.moveX}px`,
+              "--move-y": `${controls.moveY}px`,
+              "--action-x": `${controls.actionX}px`,
+              "--action-y": `${controls.actionY}px`,
+            } as React.CSSProperties
+          }
+        >
+          <div className="move-pad">
+            <button
+              aria-label="向左移动"
+              onPointerDown={() => touch("KeyA", true)}
+              onPointerUp={() => touch("KeyA", false)}
+              onPointerLeave={() => touch("KeyA", false)}
+              onPointerCancel={() => touch("KeyA", false)}
+            >
+              ◀
+            </button>
+            <button
+              aria-label="向右移动"
+              onPointerDown={() => touch("KeyD", true)}
+              onPointerUp={() => touch("KeyD", false)}
+              onPointerLeave={() => touch("KeyD", false)}
+              onPointerCancel={() => touch("KeyD", false)}
+            >
+              ▶
+            </button>
+          </div>
+          <div className="action-fan">
+            <button className="jump" onPointerDown={() => touch("Space")}>跃</button>
+            <button className="dodge" onPointerDown={() => touch("ShiftLeft")}>闪</button>
+            <button className="attack" onPointerDown={() => touch("KeyJ")}>斩</button>
+            <button className="skill" onPointerDown={() => touch("KeyK")}>技</button>
+            <button
+              className={`ultimate ${ui.ult >= 100 ? "ultimate-ready" : ""}`}
+              onPointerDown={() => touch("KeyI")}
+            >
+              神
+            </button>
+          </div>
         </div>
+        {controlSettings && (
+          <div className="control-settings" role="dialog" aria-label="触控按键设置">
+            <div className="control-settings-head">
+              <b>触控布局</b>
+              <button onClick={() => setControlSettings(false)}>×</button>
+            </div>
+            <label>
+              按键透明度 <output>{Math.round(controls.opacity * 100)}%</output>
+              <input type="range" min="0.25" max="0.9" step="0.01" value={controls.opacity} onChange={(e) => setControl("opacity", Number(e.target.value))} />
+            </label>
+            <label>
+              左侧移动键 · 横向
+              <input type="range" min="-80" max="120" value={controls.moveX} onChange={(e) => setControl("moveX", Number(e.target.value))} />
+            </label>
+            <label>
+              左侧移动键 · 纵向
+              <input type="range" min="-120" max="40" value={controls.moveY} onChange={(e) => setControl("moveY", Number(e.target.value))} />
+            </label>
+            <label>
+              右侧技能键 · 横向
+              <input type="range" min="-140" max="60" value={controls.actionX} onChange={(e) => setControl("actionX", Number(e.target.value))} />
+            </label>
+            <label>
+              右侧技能键 · 纵向
+              <input type="range" min="-120" max="40" value={controls.actionY} onChange={(e) => setControl("actionY", Number(e.target.value))} />
+            </label>
+            <button
+              className="reset-controls"
+              onClick={() => setControls(DEFAULT_CONTROLS)}
+            >
+              恢复默认布局
+            </button>
+          </div>
+        )}
       </section>
       <footer>
         <span>◈ 火种共鸣：稳定</span>
         <span>目标：穿越焦土，击破焚风投影</span>
-        <span>v1.1 FENFENG UPDATE</span>
+        <span>v1.2 MOTION & CONTROL UPDATE</span>
       </footer>
     </main>
   );
@@ -799,7 +922,7 @@ function drawAtlas(
 function draw(
   ctx: CanvasRenderingContext2D,
   c: HTMLCanvasElement,
-  p: any,
+  p: Player,
   enemies: Enemy[],
   fx: Fx[],
   meteors: Meteor[],
@@ -809,6 +932,8 @@ function draw(
   heroNormal: HTMLImageElement,
   heroGod: HTMLImageElement,
   heroJump: HTMLImageElement,
+  heroRun: HTMLImageElement,
+  heroDodge: HTMLImageElement,
   foes: HTMLImageElement,
   bossSheet: HTMLImageElement,
   vfx: HTMLImageElement,
@@ -826,9 +951,9 @@ function draw(
   ctx.fillStyle = "#12090b";
   ctx.fillRect(0, 0, c.width, c.height);
   const arenaBg = bossArena ? whiteHole : bg;
-  if (arenaBg.complete) ctx.drawImage(arenaBg, 0, 0, c.width, c.height);
+  if (arenaBg.complete) drawImageCover(ctx, arenaBg, c.width, c.height);
   else {
-    let g = ctx.createLinearGradient(0, 0, 0, 560);
+    const g = ctx.createLinearGradient(0, 0, 0, 560);
     g.addColorStop(0, "#17070b");
     g.addColorStop(0.55, "#6a1711");
     g.addColorStop(1, "#130808");
@@ -837,7 +962,7 @@ function draw(
   }
   ctx.fillStyle = bossArena ? "rgba(255,255,255,.16)" : "rgba(255,89,25,.18)";
   for (let i = 0; i < 18; i++) {
-    let x = (i * 173 + time * 1.4) % 1000,
+    const x = (i * 173 + time * 1.4) % 1000,
       y = 100 + ((i * 67) % 330);
     ctx.fillRect(x, y, 2 + (i % 3), 2 + (i % 3));
   }
@@ -849,7 +974,7 @@ function draw(
     const ex = Math.round(e.x);
     ctx.save();
     if (e.hit > 0) ctx.globalCompositeOperation = "screen";
-    let scale = e.boss ? 1.8 : e.kind > 3 ? 1.25 : 1;
+    const scale = e.boss ? 1.8 : e.kind > 3 ? 1.25 : 1;
     if (e.boss && bossSheet.complete && bossSheet.naturalWidth) {
       const elapsed = (e.skillMax || 0) - (e.skillTime || 0);
       let pair = 0;
@@ -879,7 +1004,7 @@ function draw(
         ctx.scale(-1, 1);
       }
       ctx.filter = "grayscale(1) brightness(.18) contrast(1.8)";
-      let cols = 8,
+      const cols = 8,
         sw = foes.naturalWidth / cols,
         sh = foes.naturalHeight / 3,
         row = e.kind > 3 ? 1 : 0,
@@ -979,9 +1104,10 @@ function draw(
   });
   const idleFrame = Math.floor(time / ANIM_FRAME_TICKS) % 10;
   const normalFlip = p.face < 0;
-  // The god idle/hover sheet is authored facing left, while attack/cast rows face right.
   const godMoveFlip = p.face > 0;
-  const godActionFlip = p.face < 0;
+  // Both combat atlases follow the same visual direction as their VFX.
+  // The god-form movement row has the opposite native facing and stays separate.
+  const godCombatFlip = normalFlip;
   ctx.save();
   ctx.globalAlpha = 0.34;
   ctx.fillStyle = p.trans > 0 ? "#f2c95f" : "#080508";
@@ -1007,6 +1133,20 @@ function draw(
       220,
       godMoveFlip,
     );
+  } else if (p.dodge > 0 && p.atk <= 0 && p.skill <= 0) {
+    const f = Math.min(9, Math.floor((54 - p.dodge) / ANIM_FRAME_TICKS));
+    drawn = drawAtlas(
+      ctx,
+      heroDodge,
+      p.trans > 0 ? 2 : 0,
+      f,
+      4,
+      Math.round(p.x - (p.trans ? 110 : 85)),
+      Math.round(p.y - (p.trans ? 220 : 175)),
+      p.trans ? 220 : 170,
+      p.trans ? 220 : 175,
+      normalFlip,
+    );
   } else if (!p.ground && p.atk <= 0 && p.skill <= 0) {
     const jumpProgress = Math.max(0, Math.min(1, (GROUND_Y - p.y) / 120));
     const jumpFrame = p.vy < 0
@@ -1026,45 +1166,74 @@ function draw(
     );
   } else if (p.trans > 0) {
     const pair = p.skill > 0 ? 6 : p.atk > 0 ? 4 : 2;
+    const moving = Math.abs(p.vx) > 1 && p.skill <= 0 && p.atk <= 0;
     const f =
       p.skill > 0
         ? Math.floor((150 - p.skill) / 15) % 10
         : p.atk > 0
           ? Math.floor((60 - p.atk) / ANIM_FRAME_TICKS)
           : idleFrame;
-    drawn = drawAtlas(
-      ctx,
-      heroGod,
-      pair,
-      f,
-      8,
-      Math.round(p.x - 110),
-      Math.round(p.y - 220),
-      220,
-      220,
-      p.skill > 0 ? godActionFlip : godMoveFlip,
-    );
+    drawn = moving
+      ? drawAtlas(
+          ctx,
+          heroRun,
+          2,
+          idleFrame,
+          4,
+          Math.round(p.x - 110),
+          Math.round(p.y - 220),
+          220,
+          220,
+          normalFlip,
+        )
+      : drawAtlas(
+          ctx,
+          heroGod,
+          pair,
+          f,
+          8,
+          Math.round(p.x - 110),
+          Math.round(p.y - 220),
+          220,
+          220,
+          p.skill > 0 || p.atk > 0 ? godCombatFlip : godMoveFlip,
+        );
   } else {
-    const pair = p.skill > 0 || p.atk > 0 ? 4 : Math.abs(p.vx) > 1 ? 2 : 0;
+    const moving = Math.abs(p.vx) > 1;
+    const pair = p.skill > 0 || p.atk > 0 ? 4 : 0;
     const f =
       p.skill > 0
         ? Math.floor((60 - p.skill) / ANIM_FRAME_TICKS)
         : p.atk > 0
           ? Math.floor((60 - p.atk) / ANIM_FRAME_TICKS)
           : idleFrame;
-    drawn = drawAtlas(
-      ctx,
-      heroNormal,
-      pair,
-      f,
-      6,
-      Math.round(p.x - 80),
-      Math.round(p.y - 160),
-      160,
-      160,
-      normalFlip,
-    );
+    drawn = moving && p.skill <= 0 && p.atk <= 0
+      ? drawAtlas(
+          ctx,
+          heroRun,
+          0,
+          idleFrame,
+          4,
+          Math.round(p.x - 85),
+          Math.round(p.y - 175),
+          170,
+          175,
+          normalFlip,
+        )
+      : drawAtlas(
+          ctx,
+          heroNormal,
+          pair,
+          f,
+          6,
+          Math.round(p.x - 80),
+          Math.round(p.y - 160),
+          160,
+          160,
+          normalFlip,
+        );
   }
+
   if (!drawn) {
     ctx.fillStyle = p.trans ? "#ffd46d" : "#e8e3df";
     ctx.fillRect(p.x - 18, p.y - 82, 36, 82);
@@ -1075,7 +1244,7 @@ function draw(
     if (p.atk > 0) {
       const f = Math.floor((60 - p.atk) / ANIM_FRAME_TICKS);
       const pair = p.trans > 0 ? 4 : 0;
-      const w = p.trans > 0 ? 360 : 190,
+      const w = p.trans > 0 ? GOD_ATTACK_RANGE : NORMAL_ATTACK_RANGE,
         h = p.trans > 0 ? 230 : 145;
       const x = p.face > 0 ? p.x - 15 : p.x - w + 15;
       drawAtlas(ctx, vfx, pair, f, 10, x, p.y - h / 2 - 55, w, h, normalFlip);
@@ -1132,4 +1301,26 @@ function draw(
     ctx.fillRect(-40, -40, 1080, 640);
   }
   ctx.restore();
+}
+
+function drawImageCover(
+  ctx: CanvasRenderingContext2D,
+  image: HTMLImageElement,
+  width: number,
+  height: number,
+) {
+  const imageRatio = image.naturalWidth / image.naturalHeight;
+  const targetRatio = width / height;
+  let sx = 0;
+  let sy = 0;
+  let sw = image.naturalWidth;
+  let sh = image.naturalHeight;
+  if (imageRatio > targetRatio) {
+    sw = image.naturalHeight * targetRatio;
+    sx = (image.naturalWidth - sw) / 2;
+  } else if (imageRatio < targetRatio) {
+    sh = image.naturalWidth / targetRatio;
+    sy = (image.naturalHeight - sh) / 2;
+  }
+  ctx.drawImage(image, sx, sy, sw, sh, 0, 0, width, height);
 }
