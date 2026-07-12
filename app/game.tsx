@@ -51,6 +51,13 @@ const GOD_ANCHOR_Y: Record<number, number[]> = {
   6: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
 };
 
+const GOD_ANCHOR_X: Record<number, number[]> = {
+  // Mild center compensation: stabilizes the body without cancelling sword motion.
+  2: [-6, 0, 1, -3, 8, -4, 0, 3, -2, 8],
+  4: [-7, -8, 7, 7, -8, -7, 0, 7, 8, -7],
+  6: [-8, 5, 8, 8, 8, 5, -8, 5, 8, 8],
+};
+
 const CHAPTERS = ["焦土边境", "熔炉回廊", "毁灭王庭"];
 const DIALOGUE = [
   ["旁白", "黑潮漫过翁法罗斯最后的边境。火种仍在呼吸。"],
@@ -769,14 +776,18 @@ function drawAtlas(
   const sh = image.naturalHeight / totalRows;
   const col = f % 5;
   const row = pair + Math.floor(f / 5);
-  const anchorTable = image.src.includes("phainon-normal")
+  const yAnchorTable = image.src.includes("phainon-normal")
     ? NORMAL_ANCHOR_Y
     : image.src.includes("phainon-god")
       ? GOD_ANCHOR_Y
       : undefined;
-  const anchorOffset = (anchorTable?.[pair]?.[f] || 0) * (h / 200);
-  const dx = Math.round(x);
-  const dy = Math.round(y + anchorOffset);
+  const xAnchorTable = image.src.includes("phainon-god")
+    ? GOD_ANCHOR_X
+    : undefined;
+  const anchorX = (xAnchorTable?.[pair]?.[f] || 0) * (w / 200);
+  const anchorY = (yAnchorTable?.[pair]?.[f] || 0) * (h / 200);
+  const dx = Math.round(x + (flip ? -anchorX : anchorX));
+  const dy = Math.round(y + anchorY);
   ctx.save();
   ctx.translate(dx + (flip ? w : 0), dy);
   ctx.scale(flip ? -1 : 1, 1);
@@ -968,7 +979,9 @@ function draw(
   });
   const idleFrame = Math.floor(time / ANIM_FRAME_TICKS) % 10;
   const normalFlip = p.face < 0;
-  const godFlip = p.face > 0;
+  // The god idle/hover sheet is authored facing left, while attack/cast rows face right.
+  const godMoveFlip = p.face > 0;
+  const godActionFlip = p.face < 0;
   ctx.save();
   ctx.globalAlpha = 0.34;
   ctx.fillStyle = p.trans > 0 ? "#f2c95f" : "#080508";
@@ -992,7 +1005,7 @@ function draw(
       Math.round(p.y - 220),
       220,
       220,
-      godFlip,
+      godMoveFlip,
     );
   } else if (!p.ground && p.atk <= 0 && p.skill <= 0) {
     const jumpProgress = Math.max(0, Math.min(1, (GROUND_Y - p.y) / 120));
@@ -1009,7 +1022,7 @@ function draw(
       Math.round(p.y - (p.trans ? 220 : 175)),
       p.trans ? 220 : 170,
       p.trans ? 220 : 175,
-      p.trans ? godFlip : normalFlip,
+      p.trans ? godMoveFlip : normalFlip,
     );
   } else if (p.trans > 0) {
     const pair = p.skill > 0 ? 6 : p.atk > 0 ? 4 : 2;
@@ -1029,7 +1042,7 @@ function draw(
       Math.round(p.y - 220),
       220,
       220,
-      godFlip,
+      p.skill > 0 || p.atk > 0 ? godActionFlip : godMoveFlip,
     );
   } else {
     const pair = p.skill > 0 || p.atk > 0 ? 4 : Math.abs(p.vx) > 1 ? 2 : 0;
