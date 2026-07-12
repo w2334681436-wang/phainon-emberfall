@@ -1042,7 +1042,7 @@ function draw(
       Math.round(p.y - 220),
       220,
       220,
-      p.skill > 0 || p.atk > 0 ? godActionFlip : godMoveFlip,
+      p.skill > 0 ? godActionFlip : godMoveFlip,
     );
   } else {
     const pair = p.skill > 0 || p.atk > 0 ? 4 : Math.abs(p.vx) > 1 ? 2 : 0;
