@@ -175,7 +175,7 @@ footer {
       rgba(9, 6, 7, 0.87) 42%,
       rgba(9, 6, 7, 0.08) 75%
     ),
-    url("/assets/hell-battlefield.png") center/cover;
+    url("https://phainon-emberfall.opal-mint-9707.chatgpt.site/assets/hell-battlefield.png") center/cover;
 }
 .menu:after {
   content: "白";
