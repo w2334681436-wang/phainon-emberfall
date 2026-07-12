@@ -1022,7 +1022,7 @@ function draw(
       Math.round(p.y - (p.trans ? 220 : 175)),
       p.trans ? 220 : 170,
       p.trans ? 220 : 175,
-      p.trans ? godFlip : normalFlip,
+      p.trans ? godMoveFlip : normalFlip,
     );
   } else if (p.trans > 0) {
     const pair = p.skill > 0 ? 6 : p.atk > 0 ? 4 : 2;
