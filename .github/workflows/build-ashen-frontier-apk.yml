@@ -1,0 +1,309 @@
+name: Build Ashen Frontier APK
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tools/ashen-apk/**'
+      - '.github/workflows/build-ashen-frontier-apk.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Reconstruct web project
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p tools/ashen-apk/work/web
+          cat \
+            tools/ashen-apk/source.part00 \
+            tools/ashen-apk/source.part01 \
+            tools/ashen-apk/source.part02 \
+            tools/ashen-apk/source.part03 \
+            tools/ashen-apk/source.part04 \
+            tools/ashen-apk/source.part05a \
+            tools/ashen-apk/source.part05b \
+            tools/ashen-apk/source.part05c \
+            | base64 --decode > /tmp/ashen-source.tar.xz
+          echo '78305419d883c75c77a2e3ff7eb54493405b2de44bba8735ea8fa4de7470b225  /tmp/ashen-source.tar.xz' | sha256sum --check
+          tar -xJf /tmp/ashen-source.tar.xz -C tools/ashen-apk/work/web
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: tools/ashen-apk/work/web/package.json
+
+      - name: Build web game
+        working-directory: tools/ashen-apk/work/web
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Create Android wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT='tools/ashen-apk/work/android'
+          MAIN="$ROOT/app/src/main"
+          mkdir -p "$MAIN/java/com/openai/ashenfrontier" "$MAIN/res/values" "$MAIN/res/drawable" "$MAIN/assets/game"
+          cp -R tools/ashen-apk/work/web/dist/. "$MAIN/assets/game/"
+
+          cat > "$ROOT/settings.gradle" <<'EOF'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = 'AshenFrontier'
+          include ':app'
+          EOF
+
+          cat > "$ROOT/build.gradle" <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.7.3' apply false
+          }
+          EOF
+
+          cat > "$ROOT/gradle.properties" <<'EOF'
+          org.gradle.jvmargs=-Xmx3g -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          android.nonTransitiveRClass=true
+          EOF
+
+          cat > "$ROOT/app/build.gradle" <<'EOF'
+          plugins { id 'com.android.application' }
+
+          android {
+              namespace 'com.openai.ashenfrontier'
+              compileSdk 35
+
+              defaultConfig {
+                  applicationId 'com.openai.ashenfrontier'
+                  minSdk 24
+                  targetSdk 35
+                  versionCode 1
+                  versionName '1.0.0'
+              }
+
+              buildTypes {
+                  debug { debuggable true }
+                  release { minifyEnabled false }
+              }
+
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_17
+                  targetCompatibility JavaVersion.VERSION_17
+              }
+          }
+          EOF
+
+          cat > "$MAIN/AndroidManifest.xml" <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+              <application
+                  android:allowBackup="true"
+                  android:hardwareAccelerated="true"
+                  android:icon="@drawable/ic_launcher"
+                  android:label="@string/app_name"
+                  android:supportsRtl="true"
+                  android:theme="@style/AppTheme"
+                  android:usesCleartextTraffic="false">
+                  <activity
+                      android:name=".MainActivity"
+                      android:configChanges="orientation|screenSize|keyboardHidden|uiMode"
+                      android:enableOnBackInvokedCallback="false"
+                      android:exported="true"
+                      android:screenOrientation="sensorLandscape">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat > "$MAIN/res/values/strings.xml" <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources><string name="app_name">灰烬边境</string></resources>
+          EOF
+
+          cat > "$MAIN/res/values/styles.xml" <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources>
+              <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+                  <item name="android:windowFullscreen">true</item>
+                  <item name="android:windowNoTitle">true</item>
+                  <item name="android:windowActionModeOverlay">true</item>
+                  <item name="android:windowBackground">#070A09</item>
+                  <item name="android:statusBarColor">#000000</item>
+                  <item name="android:navigationBarColor">#000000</item>
+                  <item name="android:fontFamily">sans</item>
+              </style>
+          </resources>
+          EOF
+
+          cat > "$MAIN/res/drawable/ic_launcher.xml" <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <vector xmlns:android="http://schemas.android.com/apk/res/android"
+              android:width="108dp" android:height="108dp"
+              android:viewportWidth="108" android:viewportHeight="108">
+              <path android:fillColor="#101614" android:pathData="M0,0h108v108h-108z" />
+              <path android:fillColor="#D7B26D" android:pathData="M54,12L94,91H14Z" />
+              <path android:fillColor="#101614" android:pathData="M49,36h10v31h-10zM49,74h10v10h-10z" />
+          </vector>
+          EOF
+
+          cat > "$MAIN/java/com/openai/ashenfrontier/MainActivity.java" <<'EOF'
+          package com.openai.ashenfrontier;
+
+          import android.app.Activity;
+          import android.graphics.Color;
+          import android.os.Build;
+          import android.os.Bundle;
+          import android.view.View;
+          import android.view.Window;
+          import android.view.WindowManager;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+
+          public class MainActivity extends Activity {
+              private WebView webView;
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+                  requestWindowFeature(Window.FEATURE_NO_TITLE);
+                  getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
+                  getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                  hideSystemBars();
+
+                  webView = new WebView(this);
+                  webView.setBackgroundColor(Color.BLACK);
+                  webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
+                  setContentView(webView);
+
+                  WebSettings settings = webView.getSettings();
+                  settings.setJavaScriptEnabled(true);
+                  settings.setDomStorageEnabled(true);
+                  settings.setDatabaseEnabled(true);
+                  settings.setAllowFileAccess(true);
+                  settings.setAllowContentAccess(true);
+                  settings.setAllowFileAccessFromFileURLs(true);
+                  settings.setAllowUniversalAccessFromFileURLs(true);
+                  settings.setMediaPlaybackRequiresUserGesture(false);
+                  settings.setCacheMode(WebSettings.LOAD_DEFAULT);
+                  settings.setBuiltInZoomControls(false);
+                  settings.setDisplayZoomControls(false);
+                  settings.setSupportZoom(false);
+                  settings.setUseWideViewPort(true);
+                  settings.setLoadWithOverviewMode(true);
+
+                  WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG);
+                  webView.setWebViewClient(new WebViewClient());
+                  webView.setWebChromeClient(new WebChromeClient());
+                  webView.loadUrl("file:///android_asset/game/index.html");
+              }
+
+              private void hideSystemBars() {
+                  getWindow().getDecorView().setSystemUiVisibility(
+                      View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY |
+                      View.SYSTEM_UI_FLAG_FULLSCREEN |
+                      View.SYSTEM_UI_FLAG_HIDE_NAVIGATION |
+                      View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN |
+                      View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION |
+                      View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                  );
+              }
+
+              @Override
+              public void onWindowFocusChanged(boolean hasFocus) {
+                  super.onWindowFocusChanged(hasFocus);
+                  if (hasFocus) hideSystemBars();
+              }
+
+              @Override
+              public void onBackPressed() {
+                  if (webView != null && webView.canGoBack()) webView.goBack();
+                  else super.onBackPressed();
+              }
+
+              @Override
+              protected void onPause() {
+                  if (webView != null) webView.onPause();
+                  super.onPause();
+              }
+
+              @Override
+              protected void onResume() {
+                  super.onResume();
+                  if (webView != null) webView.onResume();
+                  hideSystemBars();
+              }
+
+              @Override
+              protected void onDestroy() {
+                  if (webView != null) {
+                      webView.loadUrl("about:blank");
+                      webView.destroy();
+                  }
+                  super.onDestroy();
+              }
+          }
+          EOF
+
+      - name: Build installable APK
+        working-directory: tools/ashen-apk/work/android
+        run: gradle --no-daemon :app:assembleDebug
+
+      - name: Verify and stage output
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p tools/ashen-apk/output
+          cp tools/ashen-apk/work/android/app/build/outputs/apk/debug/app-debug.apk tools/ashen-apk/output/Ashen-Frontier-Android.apk
+          unzip -t tools/ashen-apk/output/Ashen-Frontier-Android.apk
+          sha256sum tools/ashen-apk/output/Ashen-Frontier-Android.apk > tools/ashen-apk/output/SHA256.txt
+          cd tools/ashen-apk/work && zip -qr ../output/Ashen-Frontier-Android-Project.zip android
+
+      - name: Upload APK and Android project
+        uses: actions/upload-artifact@v4
+        with:
+          name: ashen-frontier-android
+          path: tools/ashen-apk/output/*
+          if-no-files-found: error
+          retention-days: 7
