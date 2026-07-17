@@ -1,0 +1,249 @@
+-  renderer.setPixelRatio(Math.min(devicePixelRatio, isMobile ? 1.25 : 1.7));
++  renderer.setPixelRatio(Math.min(devicePixelRatio, isMobile ? renderer.getPixelRatio() : 1.55));
+ }
+ 
+ function ensureAudio() {
+@@ -758,7 +896,7 @@ function playSound(name) {
+     pickup: [760, 1120, .09, .08], consume: [330, 520, .16, .07], craft: [220, 460, .16, .08], build: [120, 80, .18, .14],
+     swing: [170, 75, .11, .05], hit: [150, 90, .08, .08], headshot: [900, 430, .07, .09], wood: [115, 75, .09, .1], stone: [520, 220, .08, .09],
+     gun: [160, 55, .1, .18], rifle: [125, 45, .12, .22], empty: [900, 720, .04, .04], reload: [310, 230, .12, .05],
+-    jump: [120, 160, .08, .025], zombieHit: [90, 58, .18, .09], mission: [330, 880, .7, .12]
++    jump: [120, 160, .08, .025], horn: [220, 180, .38, .12], zombieHit: [90, 58, .18, .09], mission: [330, 880, .7, .12]
+   };
+   const [start, end, duration, volume] = presets[name] || [260, 180, .08, .04];
+   osc.type = ['gun', 'rifle', 'build', 'zombieHit'].includes(name) ? 'sawtooth' : 'triangle';
+@@ -775,6 +913,7 @@ function setupMobileControls() {
+   const knob = stick.querySelector('i');
+   const look = document.getElementById('look-zone');
+   stick.addEventListener('pointerdown', (e) => {
++    e.preventDefault();
+     mobileMove.active = true; mobileMove.originX = e.clientX; mobileMove.originY = e.clientY; stick.setPointerCapture(e.pointerId);
+   });
+   stick.addEventListener('pointermove', (e) => {
+@@ -788,22 +927,48 @@ function setupMobileControls() {
+   const endMove = () => { mobileMove.active = false; mobileMove.x = 0; mobileMove.y = 0; knob.style.transform = ''; };
+   stick.addEventListener('pointerup', endMove); stick.addEventListener('pointercancel', endMove);
+ 
+-  look.addEventListener('pointerdown', (e) => { mobileLook.active = true; mobileLook.x = e.clientX; mobileLook.y = e.clientY; look.setPointerCapture(e.pointerId); });
++  look.addEventListener('pointerdown', (e) => { e.preventDefault(); mobileLook.active = true; mobileLook.x = e.clientX; mobileLook.y = e.clientY; look.setPointerCapture(e.pointerId); });
+   look.addEventListener('pointermove', (e) => {
+     if (!mobileLook.active || !playing) return;
+     const dx = e.clientX - mobileLook.x; const dy = e.clientY - mobileLook.y;
+-    camera.rotation.y -= dx * .0042;
+-    camera.rotation.x = THREE.MathUtils.clamp(camera.rotation.x - dy * .0036, -Math.PI / 2.05, Math.PI / 2.05);
++    if (player.inVehicle) {
++      player.vehicleLookYaw = THREE.MathUtils.clamp(player.vehicleLookYaw - dx * .0042, -1.5, 1.5);
++      player.vehicleLookPitch = THREE.MathUtils.clamp(player.vehicleLookPitch - dy * .0036, -0.55, 0.35);
++    } else {
++      camera.rotation.y -= dx * .0042;
++      camera.rotation.x = THREE.MathUtils.clamp(camera.rotation.x - dy * .0036, -Math.PI / 2.05, Math.PI / 2.05);
++    }
+     mobileLook.x = e.clientX; mobileLook.y = e.clientY;
+   });
+   const endLook = () => { mobileLook.active = false; };
+   look.addEventListener('pointerup', endLook); look.addEventListener('pointercancel', endLook);
+-  document.querySelectorAll('[data-mobile]').forEach((button) => button.addEventListener('pointerdown', (e) => {
+-    e.preventDefault();
++
++  document.querySelectorAll('[data-mobile]').forEach((button) => {
+     const action = button.dataset.mobile;
+-    if (action === 'attack') useEquipped();
+-    if (action === 'interact') interact();
+-    if (action === 'jump') player.jump();
+-    if (action === 'inventory') toggleInventory(!ui.inventoryOpen);
+-  }));
++    const release = () => {
++      button.classList.remove('pressed');
++      if (action === 'sprint') { mobileSprintHeld = false; keys.MobileSprint = false; }
++      if (action === 'jump') keys.MobileBrake = false;
++    };
++    button.addEventListener('pointerdown', (e) => {
++      e.preventDefault();
++      button.classList.add('pressed');
++      ensureAudio();
++      if (action === 'attack') {
++        if (activeBuild) placeBuild();
++        else if (player.inVehicle) { zombies.alertNearby(player.camera.position, 110); playSound('horn'); }
++        else useEquipped();
++      }
++      if (action === 'interact') { if (activeBuild) rotateBuild(1); else interact(); }
++      if (action === 'jump') { if (player.inVehicle) keys.MobileBrake = true; else player.jump(); }
++      if (action === 'reload') player.startReload();
++      if (action === 'sprint') { mobileSprintHeld = true; keys.MobileSprint = true; }
++      if (action === 'cancel') cancelBuild();
++      if (action === 'inventory') toggleInventory(!ui.inventoryOpen);
++    });
++    button.addEventListener('pointerup', release);
++    button.addEventListener('pointercancel', release);
++    button.addEventListener('pointerleave', () => { if (action === 'sprint' || action === 'jump') release(); });
++  });
+ }
++
+diff --git a/src/styles.css b/src/styles.css
+index 0366ca7..d6a8e22 100644
+--- a/src/styles.css
++++ b/src/styles.css
+@@ -100,3 +100,20 @@ kbd { display: inline-grid; place-items: center; min-width: 25px; height: 25px;
+ @media (max-width: 760px) {
+   .start-card{padding:30px 26px}.start-card h1{font-size:60px}.menu-actions{grid-template-columns:1fr}.menu-actions button,#guide-btn{grid-column:auto}.top-left-stack{left:12px;top:12px;width:245px}.mission-card{display:none}.world-status{right:12px;top:12px}.world-status .fps{display:none}#minimap{display:none}.survival-panel{left:12px;bottom:12px;width:210px;padding:9px}.hotbar-wrap{bottom:8px}.hotbar{gap:2px;padding:4px}.hotbar .item-slot{width:41px;height:49px}.hotbar .slot-icon{height:27px;font-size:18px}.hotbar .item-slot b{display:none}.weapon-panel{right:12px;bottom:12px;min-width:130px;padding:9px}.ammo-display b{font-size:22px}.inventory-layout{grid-template-columns:1fr}.item-detail{display:none}.backpack-grid{grid-template-columns:repeat(4,1fr)}.recipe-grid,.guide-content,.guide-columns{grid-template-columns:1fr}.overlay-card{width:calc(100vw - 20px);max-height:calc(100vh - 20px)}.inventory-card main{padding:16px;height:calc(100vh - 190px)}.overlay-card>header{padding:0 17px}.tabs{padding:0 10px}.tabs button{padding:0 12px}.location-card{display:none}
+ }
++
++/* v1.1 mobile and stability refinements */
++html, body, #app, #render-host, canvas { touch-action: none; overscroll-behavior: none; }
++button, .item-slot { -webkit-tap-highlight-color: transparent; user-select: none; }
++.mobile-controls button[data-mobile="reload"] { right: 112px; bottom: 42px; width: 56px; height: 56px; }
++.mobile-controls button[data-mobile="sprint"] { left: 112px; bottom: 130px; width: 58px; height: 58px; }
++.mobile-controls button[data-mobile="cancel"] { right: 112px; bottom: 42px; width: 58px; height: 58px; background: rgba(112,43,38,.72); }
++.mobile-controls button.pressed { transform: scale(.92); filter: brightness(1.18); }
++.recipe small { display:block; line-height:1.35; }
++@media(max-width:760px){
++  .build-panel{left:50%;top:72px;bottom:auto;transform:translateX(-50%);max-width:58vw;padding:10px 14px;text-align:center}
++  .build-panel span{font-size:8px}
++  .vehicle-hud{bottom:70px}
++  .mobile-controls button[data-mobile="reload"]{right:108px;bottom:38px}
++  .mobile-controls button[data-mobile="sprint"]{left:104px;bottom:128px}
++  .mobile-controls button[data-mobile="cancel"]{right:108px;bottom:38px}
++}
+diff --git a/src/ui.js b/src/ui.js
+index 1e4dcfa..e779a32 100644
+--- a/src/ui.js
++++ b/src/ui.js
+@@ -10,6 +10,9 @@ export class GameUI {
+     this.messageQueue = [];
+     this.activeTab = 'inventory';
+     this.buildType = null;
++    this.vehicleVisible = false;
++    this.isMobile = false;
++    this.craftingStation = 'hand';
+     this.renderBase();
+     this.cache();
+     this.bind();
+@@ -22,7 +25,7 @@ export class GameUI {
+         <div class="start-vignette"></div>
+         <div class="hero-grid"></div>
+         <section class="start-card">
+-          <div class="eyebrow">原创低多边形 · 开放世界 · 第一人称生存</div>
++          <div class="eyebrow">原创低多边形 · 开放世界 · 第一人称生存 · v1.1</div>
+           <h1>灰烬边境</h1>
+           <h2>生存禁区</h2>
+           <p class="tagline">城市已经沉默，广播仍在呼救。搜刮物资、制造工具、建立营地，在感染者占据的群岛上活下去。</p>
+@@ -99,7 +102,7 @@ export class GameUI {
+         <section id="build-panel" class="build-panel glass hidden">
+           <div class="section-kicker">建造模式</div>
+           <b id="build-name">木质地基</b>
+-          <span>左键放置 · Q / E 旋转 · 右键取消</span>
++          <span id="build-help">左键放置 · Q / E 旋转 · 右键取消</span>
+         </section>
+       </div>
+ 
+@@ -160,6 +163,9 @@ export class GameUI {
+         <button data-mobile="attack" class="mobile-main">攻击</button>
+         <button data-mobile="interact">互动</button>
+         <button data-mobile="jump">跳跃</button>
++        <button data-mobile="reload">换弹</button>
++        <button data-mobile="sprint">冲刺</button>
++        <button data-mobile="cancel" class="hidden">取消</button>
+         <button data-mobile="inventory">背包</button>
+       </div>
+     `;
+@@ -177,7 +183,8 @@ export class GameUI {
+       prompt: $('interaction-prompt'), promptText: $('interaction-prompt')?.querySelector('span'), feed: $('message-feed'), damage: $('damage-flash'), hitmarker: $('hitmarker'), headshot: $('headshot-label'),
+       missionTitle: $('mission-title'), missionText: $('mission-text'), missionProgress: $('mission-progress'),
+       minimap: $('minimap'), vehicleHud: $('vehicle-hud'), vehicleSpeed: $('vehicle-speed'), vehicleFuel: $('vehicle-fuel'), vehicleHealth: $('vehicle-health'),
+-      buildPanel: $('build-panel'), buildName: $('build-name'), mobile: $('mobile-controls')
++      buildPanel: $('build-panel'), buildName: $('build-name'), buildHelp: $('build-help'), mobile: $('mobile-controls'),
++      mobileAttack: document.querySelector('[data-mobile="attack"]'), mobileInteract: document.querySelector('[data-mobile="interact"]'), mobileJump: document.querySelector('[data-mobile="jump"]'), mobileReload: document.querySelector('[data-mobile="reload"]'), mobileSprint: document.querySelector('[data-mobile="sprint"]'), mobileCancel: document.querySelector('[data-mobile="cancel"]')
+     };
+   }
+ 
+@@ -206,10 +213,19 @@ export class GameUI {
+   }
+ 
+   enterGame(isMobile = false) {
++    this.isMobile = isMobile;
+     this.els.start.classList.remove('active');
+     this.els.start.classList.add('hidden');
+     this.els.hud.classList.remove('hidden');
+-    if (isMobile) this.els.mobile.classList.remove('hidden');
++    if (isMobile) {
++      this.els.mobile.classList.remove('hidden');
++      const guide = this.root.querySelector('#guide-tab');
++      const paragraphs = guide?.querySelectorAll('p');
++      if (paragraphs?.length >= 2) {
++        paragraphs[0].textContent = '左侧摇杆移动，右侧空白区域滑动观察；长按冲刺，点击跳跃与互动。';
++        paragraphs[1].textContent = '点击攻击键进行近战或射击，枪械使用换弹键。驾驶时按钮会自动切换为鸣笛、下车和刹车。';
++      }
++    }
+   }
+ 
+   switchTab(name) {
+@@ -243,14 +259,15 @@ export class GameUI {
+     this.els.infectionValue.textContent = `${Math.round(player.infection)}%`;
+   }
+ 
+-  updateInventory(inventory) {
++  updateInventory(inventory, station = this.craftingStation) {
++    this.craftingStation = station;
+     this.els.hotbar.innerHTML = '';
+     for (let i = 0; i < 8; i++) this.els.hotbar.appendChild(this.makeSlot(inventory.slots[i], i, i === inventory.selected, true));
+     this.els.backpack.innerHTML = '';
+     for (let i = 0; i < inventory.slots.length; i++) this.els.backpack.appendChild(this.makeSlot(inventory.slots[i], i, i === inventory.selected, false));
+     this.els.capacity.textContent = `${inventory.slots.filter(Boolean).length} / ${inventory.slots.length}`;
+     this.updateWeapon(inventory);
+-    this.renderRecipes(inventory);
++    this.renderRecipes(inventory, station);
+   }
+ 
+   makeSlot(slot, index, selected, hotbar) {
+@@ -301,15 +318,17 @@ export class GameUI {
+     } else this.els.ammoDisplay.classList.add('hidden');
+   }
+ 
+-  renderRecipes(inventory) {
++  renderRecipes(inventory, station = 'hand') {
+     this.els.recipes.innerHTML = '';
+     for (const recipe of RECIPES) {
+-      const canCraft = inventory.hasCost(recipe.cost);
++      const stationOk = !['手工台', '工作台'].includes(recipe.station) || station === 'workbench';
++      const canCraft = inventory.hasCost(recipe.cost) && stationOk;
+       const el = document.createElement('article');
+       el.className = `recipe${canCraft ? '' : ' unavailable'}`;
+       const output = recipe.build ? recipe.name : `${ITEM_DEFS[recipe.makes.id].name}${recipe.makes.qty > 1 ? ` × ${recipe.makes.qty}` : ''}`;
+       const cost = Object.entries(recipe.cost).map(([id, qty]) => `<span class="${inventory.count(id) >= qty ? 'enough' : ''}">${ITEM_DEFS[id].icon} ${ITEM_DEFS[id].name} ${inventory.count(id)}/${qty}</span>`).join('');
+-      el.innerHTML = `<div><small>${recipe.station}</small><h4>${output}</h4><p>${cost}</p></div><button ${canCraft ? '' : 'disabled'}>${recipe.build ? '选择建造' : '制作'}</button>`;
++      const stationLabel = stationOk ? recipe.station : `${recipe.station} · 需要靠近工作台`;
++      el.innerHTML = `<div><small>${stationLabel}</small><h4>${output}</h4><p>${cost}</p></div><button ${canCraft ? '' : 'disabled'}>${recipe.build ? '选择建造' : '制作'}</button>`;
+       el.querySelector('button').addEventListener('click', () => this.callbacks.craft?.(recipe));
+       this.els.recipes.appendChild(el);
+     }
+@@ -337,7 +356,7 @@ export class GameUI {
+     setTimeout(() => this.els.locationToast.classList.remove('show'), 2600);
+   }
+ 
+-  prompt(text, key = 'E') {
++  prompt(text, key = this.isMobile ? '触摸互动' : 'E') {
+     if (!text) {
+       this.els.prompt.classList.add('hidden');
+       return;
+@@ -392,7 +411,9 @@ export class GameUI {
+   }
+ 
+   updateVehicle(vehicle, visible) {
++    this.vehicleVisible = visible;
+     this.els.vehicleHud.classList.toggle('hidden', !visible);
++    this.refreshMobileContext();
+     if (!visible) return;
+     this.els.vehicleSpeed.textContent = Math.round(Math.abs(vehicle.speed) * 3.6);
+     this.els.vehicleFuel.textContent = Math.round(vehicle.fuel);
+@@ -403,6 +424,20 @@ export class GameUI {
+     this.buildType = type;
+     this.els.buildPanel.classList.toggle('hidden', !type);
+     if (name) this.els.buildName.textContent = name;
++    this.els.buildHelp.textContent = this.isMobile ? '攻击键放置 · 互动键旋转 · 取消键退出' : '左键放置 · Q / E 旋转 · 右键取消';
++    this.refreshMobileContext();
++  }
++
++  refreshMobileContext() {
++    if (!this.isMobile || !this.els.mobileAttack) return;
++    const building = Boolean(this.buildType);
++    const driving = Boolean(this.vehicleVisible);
