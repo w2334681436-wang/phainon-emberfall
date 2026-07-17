@@ -1,0 +1,147 @@
+.KeyW ? 1 : 0) - (keys.KeyS ? 1 : 0);
++    const keyboardSteer = (keys.KeyA ? 1 : 0) - (keys.KeyD ? 1 : 0);
++    const throttle = keyboardThrottle || this.moveInput.forward;
++    const steer = keyboardSteer || -this.moveInput.right;
++    const braking = Boolean(keys.Space || keys.MobileBrake);
++    if (v.fuel > 0 && Math.abs(throttle) > 0.04) {
+       v.speed += throttle * 18 * dt;
+       v.fuel = Math.max(0, v.fuel - Math.abs(throttle) * dt * 0.34);
+     } else {
+       v.speed = THREE.MathUtils.damp(v.speed, 0, 2.4, dt);
+     }
++    if (braking) v.speed = THREE.MathUtils.damp(v.speed, 0, 8.5, dt);
+     v.speed = THREE.MathUtils.clamp(v.speed, -11, v.maxSpeed);
+-    v.mesh.rotation.y += steer * v.turnSpeed * dt * (v.speed / v.maxSpeed);
++    if (Math.abs(v.speed) > 0.2) v.mesh.rotation.y += steer * v.turnSpeed * dt * (v.speed / v.maxSpeed);
+     const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(v.mesh.quaternion);
+     const oldPos = v.mesh.position.clone();
+     v.mesh.position.addScaledVector(forward, v.speed * dt);
++    const half = WORLD_SIZE * 0.485;
++    v.mesh.position.x = THREE.MathUtils.clamp(v.mesh.position.x, -half, half);
++    v.mesh.position.z = THREE.MathUtils.clamp(v.mesh.position.z, -half, half);
+     const ground = this.world.terrainHeight(v.mesh.position.x, v.mesh.position.z);
+     v.mesh.position.y = ground + 0.1;
+     if (this.vehicleCollides(v.mesh.position)) {
+       v.mesh.position.copy(oldPos);
+-      if (Math.abs(v.speed) > 15) {
+-        v.health = Math.max(0, v.health - Math.abs(v.speed) * 0.35);
+-        this.damage(Math.abs(v.speed) * 0.15, '撞击');
++      if (Math.abs(v.speed) > 9) {
++        v.health = Math.max(0, v.health - Math.abs(v.speed) * 0.42);
++        this.damage(Math.abs(v.speed) * 0.16, '撞击');
+       }
+-      v.speed *= -0.25;
++      v.speed *= -0.18;
++    } else {
++      this.callbacks.vehicleImpact?.(v);
+     }
+-    v.speed = THREE.MathUtils.damp(v.speed, 0, 0.33, dt);
++    v.speed = THREE.MathUtils.damp(v.speed, 0, braking ? 7 : 0.33, dt);
+     this.camera.position.copy(v.mesh.position).add(new THREE.Vector3(0, 4.7, 0));
+-    this.camera.quaternion.copy(v.mesh.quaternion);
++    this.camera.rotation.set(this.vehicleLookPitch, v.mesh.rotation.y + this.vehicleLookYaw, 0, 'YXZ');
+     this.callbacks.vehicle?.(v);
+   }
+ 
+   vehicleCollides(pos) {
+     for (const c of this.world.colliders) {
+-      if (c.box.clone().expandByScalar(2.2).containsPoint(new THREE.Vector3(pos.x, c.box.min.y + 1, pos.z))) return true;
++      const box = c.box;
++      if (pos.x > box.min.x - 2.2 && pos.x < box.max.x + 2.2 && pos.z > box.min.z - 2.2 && pos.z < box.max.z + 2.2) return true;
+     }
+     return false;
+   }
+@@ -256,7 +306,9 @@ export class Player {
+     this.inVehicle = true;
+     v.occupied = true;
+     this.velocity.set(0, 0, 0);
+-    this.callbacks.message?.('已进入旧越野车；W/S 加减速，A/D 转向，E 下车');
++    this.vehicleLookYaw = 0;
++    this.vehicleLookPitch = -0.08;
++    this.callbacks.message?.('已进入旧越野车；前后控制加减速，左右控制转向，互动键下车');
+     return true;
+   }
+ 
+@@ -265,9 +317,18 @@ export class Player {
+     if (!v || !this.inVehicle) return false;
+     this.inVehicle = false;
+     v.occupied = false;
+-    const side = new THREE.Vector3(4.2, PLAYER_HEIGHT, 0).applyQuaternion(v.mesh.quaternion);
+-    this.camera.position.copy(v.mesh.position).add(side);
+-    this.camera.position.y = this.world.terrainHeight(this.camera.position.x, this.camera.position.z) + PLAYER_HEIGHT;
++    const candidates = [
++      new THREE.Vector3(4.2, 0, 0), new THREE.Vector3(-4.2, 0, 0),
++      new THREE.Vector3(0, 0, -5.2), new THREE.Vector3(0, 0, 5.2)
++    ];
++    let exit = null;
++    for (const offset of candidates) {
++      const candidate = v.mesh.position.clone().add(offset.applyQuaternion(v.mesh.quaternion));
++      candidate.y = this.world.terrainHeight(candidate.x, candidate.z) + PLAYER_HEIGHT;
++      if (!this.collides(candidate)) { exit = candidate; break; }
++    }
++    this.camera.position.copy(exit || this.lastSafePosition);
++    this.camera.rotation.set(0, v.mesh.rotation.y, 0, 'YXZ');
+     this.callbacks.message?.('已下车');
+     return true;
+   }
+@@ -308,12 +369,24 @@ export class Player {
+       this.thirst = Math.min(100, this.thirst + (def.thirst || 0));
+     } else if (def.type === 'drink') {
+       this.thirst = Math.min(100, this.thirst + (def.thirst || 0));
++    } else if (def.type === 'fuel') {
++      const vehicle = this.world.vehicle;
++      if (!vehicle || (!this.inVehicle && vehicle.mesh.position.distanceTo(this.camera.position) > 7)) {
++        this.callbacks.message?.('需要靠近越野车才能加油', 'danger');
++        return false;
++      }
++      if (vehicle.fuel >= 99.5) {
++        this.callbacks.message?.('油箱已经加满');
++        return false;
++      }
++      vehicle.fuel = Math.min(100, vehicle.fuel + 28);
++      this.callbacks.message?.('已为越野车补充燃油', 'success');
+     } else return false;
+     slot.qty -= 1;
+     if (slot.qty <= 0) this.inventory.slots[this.inventory.selected] = null;
+     this.inventory.onChange();
+     this.callbacks.sound?.('consume');
+-    this.callbacks.message?.(`使用了 ${def.name}`);
++    if (def.type !== 'fuel') this.callbacks.message?.(`使用了 ${def.name}`);
+     return true;
+   }
+ 
+@@ -322,6 +395,7 @@ export class Player {
+     if (!slot) return false;
+     const def = ITEM_DEFS[slot.id];
+     if (def.type !== 'gun' || this.reloadTimer > 0 || slot.mag >= def.magSize || this.inventory.count(def.ammo) <= 0) return false;
++    this.reloadSlotIndex = this.inventory.selected;
+     this.reloadTimer = slot.id === 'rifle' ? 1.75 : 1.25;
+     this.callbacks.message?.('正在换弹…');
+     this.callbacks.sound?.('reload');
+@@ -329,14 +403,18 @@ export class Player {
+   }
+ 
+   finishReload() {
+-    const slot = this.inventory.selectedSlot;
++    const index = this.reloadSlotIndex;
++    const slot = this.inventory.slots[index];
++    this.reloadSlotIndex = -1;
++    this.reloadTimer = 0;
+     if (!slot) return;
+     const def = ITEM_DEFS[slot.id];
+-    if (def.type !== 'gun') return;
++    if (def?.type !== 'gun') return;
+     const needed = def.magSize - (slot.mag || 0);
+     const available = this.inventory.count(def.ammo);
+     const load = Math.min(needed, available);
+-    this.inventory.removeItem(def.ammo, load);
++    if (load <= 0) return;
++    this.inventory.removeItem(def.ammo, load, { silent: true });
+     slot.mag = (slot.mag || 0) + load;
+     this.inventory.onChange();
+     this.callbacks.message?.('换弹完成');
+@@ -346,24 +424,43 @@ export class Player {
+     return {
+       position: this.camera.position.toArray(), health: this.health, hunger: this.hunger, thirst: this.thirst,
+       stamina: this.stamina, infection: this.infection, distanceTravelled: this.distanceTravelled,
++      rotation: [this.camera.rotation.x, this.camera.rotation.y, this.camera.rotation.z], inVehicle: t
