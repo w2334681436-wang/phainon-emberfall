@@ -1,0 +1,262 @@
+diff --git a/README.md b/README.md
+index 4534d55..f934c3b 100644
+--- a/README.md
++++ b/README.md
+@@ -1,7 +1,24 @@
+-# 灰烬边境：生存禁区
++# 灰烬边境：生存禁区 v1.1.0
+ 
+ 原创低多边形 3D 第一人称开放世界生存网页游戏。玩法参考开放世界僵尸生存品类，但不使用《未转变者》的名称、代码、地图或素材。
+ 
++## v1.1.0 稳定性与移动端更新
++
++- 修复移动端建造无法放置、旋转和取消的问题
++- 修复移动端车辆无法加速、转向和刹车的问题
++- 增加移动端换弹、冲刺与动态驾驶按钮
++- 修复换弹时切换武器导致弹药装入错误武器的问题
++- 修复满背包制作时材料被消耗但产物丢失的问题
++- 修复工作台配方可在任意地点制作的问题
++- 修复枪械、近战和采集可穿过墙体命中的问题
++- 保证主线门禁卡必定生成，避免任务无法完成
++- 增加树木、矿石、灌木、感染者、车辆和建筑的完整存档
++- 修复重开游戏后旧世界状态残留的问题
++- 增加损坏车辆处理、燃油桶加油和车辆撞击感染者
++- 增强异常存档校验，限制非法坐标、数量和状态值
++- 针对手机降低远处实体、阴影与像素密度，加入动态分辨率
++- 改进 Android 返回键、自动保存、WebGL 上下文恢复和触控防误操作
++
+ ## 已实现内容
+ 
+ - 1800 × 1800 程序化开放地图
+@@ -55,3 +72,7 @@ npm run build
+ ## 技术栈
+ 
+ Three.js、Vite、原生 JavaScript、WebGL、Web Audio API、LocalStorage。
++
++## 质量验证
++
++生产构建、桌面端与移动端 WebGL 冒烟测试、移动端建造与车辆测试、制作事务测试、换弹目标测试、世界状态存档恢复测试和 Android 返回键测试均已通过。
+diff --git a/package-lock.json b/package-lock.json
+index f35ac8e..381a282 100644
+--- a/package-lock.json
++++ b/package-lock.json
+@@ -1,12 +1,12 @@
+ {
+   "name": "ashen-frontier",
+-  "version": "1.0.0",
++  "version": "1.1.0",
+   "lockfileVersion": 3,
+   "requires": true,
+   "packages": {
+     "": {
+       "name": "ashen-frontier",
+-      "version": "1.0.0",
++      "version": "1.1.0",
+       "dependencies": {
+         "three": "^0.180.0"
+       },
+diff --git a/package.json b/package.json
+index d7b4b9a..198b299 100644
+--- a/package.json
++++ b/package.json
+@@ -1,6 +1,6 @@
+ {
+   "name": "ashen-frontier",
+-  "version": "1.0.0",
++  "version": "1.1.0",
+   "private": true,
+   "type": "module",
+   "scripts": {
+diff --git a/src/entities.js b/src/entities.js
+index 09d26fc..5815d27 100644
+--- a/src/entities.js
++++ b/src/entities.js
+@@ -46,7 +46,19 @@ export class Inventory {
+     return this.slots.reduce((sum, slot) => sum + (slot?.id === id ? slot.qty : 0), 0);
+   }
+ 
+-  removeItem(id, qty = 1) {
++  canAdd(id, qty = 1) {
++    const def = ITEM_DEFS[id];
++    if (!def || qty <= 0) return false;
++    let capacity = 0;
++    for (const slot of this.slots) {
++      if (!slot) capacity += def.stack;
++      else if (def.stack > 1 && slot.id === id) capacity += Math.max(0, def.stack - slot.qty);
++      if (capacity >= qty) return true;
++    }
++    return capacity >= qty;
++  }
++
++  removeItem(id, qty = 1, options = {}) {
+     let remaining = qty;
+     for (let i = this.slots.length - 1; i >= 0; i--) {
+       const slot = this.slots[i];
+@@ -57,7 +69,7 @@ export class Inventory {
+       if (slot.qty <= 0) this.slots[i] = null;
+       if (remaining <= 0) break;
+     }
+-    this.onChange();
++    if (!options.silent) this.onChange();
+     return qty - remaining;
+   }
+ 
+@@ -67,7 +79,8 @@ export class Inventory {
+ 
+   consumeCost(cost) {
+     if (!this.hasCost(cost)) return false;
+-    for (const [id, qty] of Object.entries(cost)) this.removeItem(id, qty);
++    for (const [id, qty] of Object.entries(cost)) this.removeItem(id, qty, { silent: true });
++    this.onChange();
+     return true;
+   }
+ 
+@@ -86,9 +99,17 @@ export class Inventory {
+   }
+ 
+   restore(data) {
+-    if (!data?.slots) return;
+-    this.slots = Array.from({ length: 24 }, (_, i) => data.slots[i] || null);
+-    this.selected = Math.min(7, Math.max(0, data.selected || 0));
++    if (!Array.isArray(data?.slots)) return;
++    this.slots = Array.from({ length: 24 }, (_, i) => {
++      const raw = data.slots[i];
++      const def = raw && ITEM_DEFS[raw.id];
++      if (!def) return null;
++      const qty = Math.max(1, Math.min(def.stack, Number(raw.qty) || 1));
++      const slot = { id: raw.id, qty };
++      if (def.type === 'gun') slot.mag = Math.max(0, Math.min(def.magSize, Number(raw.mag) || 0));
++      return slot;
++    });
++    this.selected = Math.min(7, Math.max(0, Number(data.selected) || 0));
+     this.onChange();
+   }
+ }
+@@ -112,8 +133,11 @@ export class Player {
+     this.alive = true;
+     this.attackCooldown = 0;
+     this.reloadTimer = 0;
++    this.reloadSlotIndex = -1;
+     this.isSprinting = false;
+     this.inVehicle = false;
++    this.vehicleLookYaw = 0;
++    this.vehicleLookPitch = -0.08;
+     this.lastSafePosition = new THREE.Vector3(-260, 8, 35);
+     this.camera.position.set(-260, this.world.terrainHeight(-260, 35) + PLAYER_HEIGHT, 35);
+     this.camera.rotation.y = Math.PI;
+@@ -139,8 +163,14 @@ export class Player {
+     if (!this.alive) return;
+     this.attackCooldown = Math.max(0, this.attackCooldown - dt);
+     if (this.reloadTimer > 0) {
+-      this.reloadTimer -= dt;
+-      if (this.reloadTimer <= 0) this.finishReload();
++      const reloading = this.inventory.slots[this.reloadSlotIndex];
++      if (!reloading || ITEM_DEFS[reloading.id]?.type !== 'gun') {
++        this.reloadTimer = 0;
++        this.reloadSlotIndex = -1;
++      } else {
++        this.reloadTimer -= dt;
++        if (this.reloadTimer <= 0) this.finishReload();
++      }
+     }
+ 
+     if (this.inVehicle) {
+@@ -160,7 +190,7 @@ export class Player {
+       .addScaledVector(right, this.moveInput.right);
+     if (input.lengthSq() > 1) input.normalize();
+ 
+-    this.isSprinting = Boolean(keys.ShiftLeft || keys.ShiftRight) && input.lengthSq() > 0.01 && this.stamina > 3;
++    this.isSprinting = Boolean(keys.ShiftLeft || keys.ShiftRight || keys.MobileSprint) && input.lengthSq() > 0.01 && this.stamina > 3;
+     const targetSpeed = this.isSprinting ? 9.2 : 5.4;
+     const accel = this.grounded ? 18 : 5.5;
+     this.velocity.x = THREE.MathUtils.damp(this.velocity.x, input.x * targetSpeed, accel, dt);
+@@ -202,38 +232,58 @@ export class Player {
+   updateVehicle(dt, keys) {
+     const v = this.world.vehicle;
+     if (!v) return;
+-    const throttle = (keys.KeyW ? 1 : 0) - (keys.KeyS ? 1 : 0);
+-    const steer = (keys.KeyA ? 1 : 0) - (keys.KeyD ? 1 : 0);
+-    if (v.fuel > 0 && throttle !== 0) {
++    if (v.health <= 0) {
++      v.speed = 0;
++      if (!v.destroyedNotified) {
++        v.destroyedNotified = true;
++        this.callbacks.message?.('越野车已经彻底损坏', 'danger');
++        this.damage(12, '车辆损毁');
++      }
++      this.exitVehicle();
++      return;
++    }
++    const keyboardThrottle = (keys.KeyW ? 1 : 0) - (keys.KeyS ? 1 : 0);
++    const keyboardSteer = (keys.KeyA ? 1 : 0) - (keys.KeyD ? 1 : 0);
++    const throttle = THREE.MathUtils.clamp(keyboardThrottle - this.moveInput.forward, -1, 1);
++    const steer = THREE.MathUtils.clamp(keyboardSteer - this.moveInput.right, -1, 1);
++    const braking = Boolean(keys.Space);
++    if (v.fuel > 0 && throttle !== 0 && !braking) {
++      v.speed += throttle * 15 * dt;
++      v.fuel = Math.max(0, v.fuel - Math.abs(throttle) * dt * 0.19);
++    } else {
++      v.speed = THREE.MathUtils.damp(v.speed, 0, braking ? 9 : 1.7, dt);
++    }
++    v.speed = THREE.MathUtils.clamp(v.speed, -8, 21);
++    const oldPosition = v.group.position.clone();
++    const turnStrength = THREE.MathUtils.clamp(Math.abs(v.speed) / 4, 0.2, 1.8);
++    v.group.rotation.y += steer * dt * 1.55 * turnStrength * Math.sign(v.speed || 1);
++    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(v.group.quaternion);
++    v.group.position.addScaledVector(forward, v.speed * dt);
++    const limit = this.world.size / 2 - 18;
++    v.group.position.x = THREE.MathUtils.clamp(v.group.position.x, -limit, limit);
++    v.group.position.z = THREE.MathUtils.clamp(v.group.position.z, -limit, limit);
++    v.group.position.y = this.world.terrainHeight(v.group.position.x, v.group.position.z) + 1;
++
++    if (this.world.isPositionBlocked(v.group.position, 2.7, v.group)) {
++      v.group.position.copy(oldPosition);
++      if (Math.abs(v.speed) > 6) {
++        v.health = Math.max(0, v.health - Math.abs(v.speed) * 1.35);
++        this.callbacks.message?.(`车辆撞击，耐久 ${Math.round(v.health)}%`, 'warning');
++      }
++      v.speed *= -0.16;
++    }
++
++    const impactSpeed = Math.abs(v.speed);
++    if (impactSpeed > 4.5) this.world.hitZombiesWithVehicle?.(v, impactSpeed, this);
++
++    const cameraOffset = new THREE.Vector3(0, 4.3, 8.4);
++    cameraOffset.applyAxisAngle(new THREE.Vector3(0, 1, 0), v.group.rotation.y + this.vehicleLookYaw);
++    this.camera.position.copy(v.group.position).add(cameraOffset);
++    this.camera.lookAt(
++      v.group.position.x + Math.sin(v.group.rotation.y + this.vehicleLookYaw) * 6,
++      v.group.position.y + 1.8 + this.vehicleLookPitch * 5,
++      v.group.position.z - Math.cos(v.group.rotation.y + this.vehicleLookYaw) * 6,
++    );
+-      v.speed += throttle * 15 * dt;
+-      v.fuel = Math.max(0, v.fuel - Math.abs(throttle) * dt * 0.22);
+-    } else {
+-      v.speed = THREE.MathUtils.damp(v.speed, 0, 1.5, dt);
+-    }
+-    v.speed = THREE.MathUtils.clamp(v.speed, -7, 19);
+-    v.group.rotation.y += steer * dt * 1.5 * Math.sign(v.speed || 1);
+-    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(v.group.quaternion);
+-    v.group.position.addScaledVector(forward, v.speed * dt);
+-    v.group.position.y = this.world.terrainHeight(v.group.position.x, v.group.position.z) + 1;
+-
+-    const cameraOffset = new THREE.Vector3(0, 4.2, 8.5).applyQuaternion(v.group.quaternion);
+-    this.camera.position.copy(v.group.position).add(cameraOffset);
+-    this.camera.lookAt(v.group.position.x, v.group.position.y + 1.6, v.group.position.z);
+     this.lastSafePosition.copy(v.group.position);
+   }
+
+   look(dx, dy) {
+-    if (this.inVehicle) return;
++    if (this.inVehicle) {
++      this.vehicleLookYaw -= dx * this.settings.sensitivity;
++      this.vehicleLookPitch = THREE.MathUtils.clamp(
++        this.vehicleLookPitch - dy * this.settings.sensitivity,
++        -0.55,
++        0.38,
++      );
++      return;
++    }
+     this.camera.rotation.y -= dx * this.settings.sensitivity;
+     this.camera.rotation.x -= dy * this.settings.sensitivity;
+     this.camera.rotation.x = THREE.MathUtils.clamp(this.camera.rotation.x, -1.42, 1.42);
