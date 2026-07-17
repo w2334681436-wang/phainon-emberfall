@@ -1,0 +1,336 @@
++    beginBuild: (id) => { const recipe = RECIPES.find((r) => r.id === id); if (recipe) beginBuild(recipe); },
++    cancelBuild,
++    interact,
++    setMove: (forward, right) => { mobileMove.y = forward; mobileMove.x = right; },
++    stopMove: () => { mobileMove.y = 0; mobileMove.x = 0; },
++    startReload: () => player.startReload(),
++    use: useEquipped,
++    save: () => saveGame(),
++    load: () => loadGame(),
++    harvestFirst: () => { const h = world.harvestables.find((entry) => !entry.harvested); if (h) { h.hp = 0; harvest(h); } },
++    moveVehicleToPlayer: () => { world.vehicle.mesh.position.copy(player.camera.position); world.vehicle.mesh.position.y = world.terrainHeight(world.vehicle.mesh.position.x, world.vehicle.mesh.position.z) + .1; },
++    setVehicle: (patch) => Object.assign(world.vehicle, patch || {}),
++    setSlot: (index, patch) => { if (inventory.slots[index]) Object.assign(inventory.slots[index], patch || {}); inventory.onChange(); },
++    resetWorldState: () => world.resetDynamicState(),
++    openInventory: (station = 'hand') => toggleInventory(true, station)
++  };
+ }
+ 
+ function addLights() {
+@@ -175,6 +219,18 @@ function bindEvents() {
+   addEventListener('mousedown', onMouseDown);
+   addEventListener('wheel', onWheel, { passive: false });
+   addEventListener('contextmenu', (e) => e.preventDefault());
++  addEventListener('mousemove', onMouseLookVehicle);
++  addEventListener('pagehide', () => saveGame(true));
++  document.addEventListener('visibilitychange', () => {
++    if (document.hidden) saveGame(true);
++    else if (gameStarted && player.alive && !ui.inventoryOpen && !ui.pauseOpen) playing = true;
++  });
++  window.__ashenHandleBack = () => {
++    if (ui.inventoryOpen) { toggleInventory(false); return true; }
++    if (!ui.els.guideModal.classList.contains('hidden')) { ui.els.guideModal.classList.add('hidden'); return true; }
++    if (activeBuild) { cancelBuild(); return true; }
++    return false;
++  };
+ 
+   controls.addEventListener('lock', () => {
+     if (gameStarted && player.alive && !ui.inventoryOpen) {
+@@ -203,25 +259,39 @@ function startGame(loadExisting) {
+   playing = true;
+   ui.enterGame(isMobile);
+   ui.hideDeath();
+-  ui.updateInventory(inventory);
++  ui.updateInventory(inventory, craftingStation);
+   ui.updateStats(player);
+   ui.message('目标：搜寻门禁卡并恢复废弃广播塔', 'success');
+   if (!isMobile) controls.lock();
+ }
+ 
+ function resetState() {
++  cancelBuild();
++  craftingStation = 'hand';
++  world.resetDynamicState();
+   inventory = new Inventory(() => {
+-    ui?.updateInventory(inventory);
++    ui?.updateInventory(inventory, craftingStation);
+     updateWeaponModel();
+   });
+   player.inventory = inventory;
+   loot.inventory = inventory;
++  loot.resetInitial();
++  zombies.reset();
+   player.camera.position.set(-260, world.terrainHeight(-260, 35) + PLAYER_HEIGHT, 35);
+-  player.camera.rotation.y = Math.PI;
+-  player.health = 100; player.hunger = 100; player.thirst = 100; player.stamina = 100; player.infection = 0; player.alive = true; player.inVehicle = false;
+-  gameHours = 8; day = 1; reachedTower = false; placedStructures = [];
+-  zombies.kills = 0;
+-  if (world.vehicle) { world.vehicle.mesh.position.set(-254, world.towns[0].ground + .1, 65); world.vehicle.mesh.rotation.y = .12; world.vehicle.fuel = 62; world.vehicle.health = 100; world.vehicle.speed = 0; }
++  player.camera.rotation.set(0, Math.PI, 0, 'YXZ');
++  player.velocity.set(0, 0, 0);
++  player.lastSafePosition.copy(player.camera.position);
++  player.health = 100; player.hunger = 100; player.thirst = 100; player.stamina = 100; player.infection = 0;
++  player.alive = true; player.inVehicle = false; player.attackCooldown = 0; player.reloadTimer = 0; player.reloadSlotIndex = -1;
++  player.distanceTravelled = 0;
++  gameHours = 8; day = 1; weather = 'clear'; weatherTimer = 110; reachedTower = false; placedStructures = [];
++  if (world.vehicle) {
++    world.vehicle.mesh.position.set(-254, world.towns[0].ground + .1, 65);
++    world.vehicle.mesh.rotation.y = .12;
++    world.vehicle.fuel = 62; world.vehicle.health = 100; world.vehicle.speed = 0; world.vehicle.occupied = false; world.vehicle.destroyedNotified = false;
++  }
++  world.updateProximityVisibility(player.camera.position);
++  ui?.updateVehicle(world.vehicle, false);
+ }
+ 
+ function resumeGame() {
+@@ -241,9 +311,10 @@ function respawnPlayer() {
+   player.hunger = 65;
+   player.thirst = 60;
+   player.infection = Math.max(0, player.infection - 25);
++  if (player.inVehicle) player.exitVehicle();
+   player.inVehicle = false;
+   player.camera.position.set(-260, world.terrainHeight(-260, 35) + PLAYER_HEIGHT, 35);
+-  player.camera.rotation.y = Math.PI;
++  player.camera.rotation.set(0, Math.PI, 0, 'YXZ');
+   ui.hideDeath();
+   playing = true;
+   saveGame();
+@@ -304,8 +375,11 @@ function onWheel(event) {
+   inventory.select(next);
+ }
+ 
+-function toggleInventory(open) {
++function toggleInventory(open, station = 'hand') {
++  craftingStation = open ? station : 'hand';
++  ui.craftingStation = craftingStation;
+   ui.toggleInventory(open, inventory);
++  if (open) ui.updateInventory(inventory, craftingStation);
+   playing = !open;
+   if (open) {
+     if (!isMobile && controls.isLocked) controls.unlock();
+@@ -313,19 +387,29 @@ function toggleInventory(open) {
+ }
+ 
+ function handleCraft(recipe) {
++  if (recipe.station === '工作台' && craftingStation !== 'workbench') {
++    ui.message('该配方需要靠近工作台', 'danger');
++    return;
++  }
+   if (recipe.build) {
++    if (!inventory.hasCost(recipe.cost)) { ui.message('建造材料不足', 'danger'); return; }
+     beginBuild(recipe);
+     toggleInventory(false);
+     return;
+   }
+-  if (!inventory.consumeCost(recipe.cost)) {
++  if (!inventory.hasCost(recipe.cost)) {
+     ui.message('制作材料不足', 'danger');
+     return;
+   }
++  if (!inventory.canAdd(recipe.makes.id, recipe.makes.qty)) {
++    ui.message('背包空间不足，材料未被消耗', 'danger');
++    return;
++  }
++  inventory.consumeCost(recipe.cost);
+   inventory.addItem(recipe.makes.id, recipe.makes.qty);
+   playSound('craft');
+   ui.message(`制作完成：${ITEM_DEFS[recipe.makes.id].name}`, 'success');
+-  ui.updateInventory(inventory);
++  ui.updateInventory(inventory, craftingStation);
+ }
+ 
+ function beginBuild(recipe) {
+@@ -423,12 +507,14 @@ function swingMelee(damage, range, cooldown) {
+   playSound('swing');
+   const dir = new THREE.Vector3();
+   camera.getWorldDirection(dir);
+-  const hitZombie = zombies.hitMelee(camera.position, dir, damage, range);
++  const obstacleDistance = world.raycastObstacle(camera.position, dir, range);
++  const effectiveRange = Math.max(0, Math.min(range, obstacleDistance - 0.08));
++  const hitZombie = zombies.hitMelee(camera.position, dir, damage, effectiveRange);
+   if (hitZombie) {
+     playSound('hit');
+     return;
+   }
+-  const target = nearestHarvestable(dir, range + .6);
++  const target = nearestHarvestable(dir, Math.max(0, Math.min(range + .6, obstacleDistance - 0.08)));
+   if (target) {
+     target.hp -= damage;
+     playSound(target.type === 'tree' ? 'wood' : 'stone');
+@@ -453,6 +539,7 @@ function nearestHarvestable(dir, range) {
+ }
+ 
+ function harvest(target) {
++  target.harvested = true;
+   target.mesh.visible = false;
+   for (const [id, qty] of Object.entries(target.drops)) {
+     if (qty > 0) inventory.addItem(id, qty);
+@@ -475,8 +562,9 @@ function fireGun(slot, def) {
+   zombies.alertNearby(camera.position, def.id === 'rifle' ? 125 : 92);
+   const dir = new THREE.Vector3();
+   camera.getWorldDirection(dir);
+-  const hit = zombies.hitRay(camera.position, dir, def.damage, def.range, def.id === 'rifle' ? .008 : .012);
+-  createTracer(camera.position, dir, hit?.distance || Math.min(def.range, 85));
++  const obstacleDistance = world.raycastObstacle(camera.position, dir, def.range);
++  const hit = zombies.hitRay(camera.position, dir, def.damage, Math.max(0, obstacleDistance - 0.08), def.id === 'rifle' ? .008 : .012);
++  createTracer(camera.position, dir, hit?.distance || Math.min(obstacleDistance, 85));
+ }
+ 
+ function createTracer(origin, direction, distance) {
+@@ -520,7 +608,7 @@ function interact() {
+     player.infection = Math.max(0, player.infection - 2);
+     ui.message('在篝火旁休整片刻');
+   } else if (inter.type === 'workbench') {
+-    toggleInventory(true); ui.switchTab('crafting');
++    toggleInventory(true, 'workbench'); ui.switchTab('crafting');
+   } else if (inter.type === 'radio') {
+     if (inventory.count('keycard') > 0) {
+       reachedTower = true;
+@@ -538,7 +626,11 @@ function findInteraction() {
+   for (const inter of world.interactables) {
+     if (inter.type === 'water') continue;
+     const d = camera.position.distanceTo(inter.position);
+-    if (d < Math.min(bestD, inter.radius || 5)) { best = inter; bestD = d; }
++    if (d >= Math.min(bestD, inter.radius || 5)) continue;
++    const dir = inter.position.clone().sub(camera.position).normalize();
++    const blockedAt = world.raycastObstacle(camera.position, dir, d);
++    if (blockedAt < d - 0.6 && inter.type !== 'vehicle') continue;
++    best = inter; bestD = d;
+   }
+   if (!best && world.isRiver(camera.position.x, camera.position.z, 22)) {
+     best = { type: 'water', name: '河水', position: camera.position, radius: 22 };
+@@ -548,7 +640,7 @@ function findInteraction() {
+ 
+ function updateInteractionPrompt() {
+   if (!playing || activeBuild || player.inVehicle) {
+-    ui.prompt(player.inVehicle ? '下车' : null, player.inVehicle ? 'E' : '');
++    ui.prompt(player.inVehicle ? '下车' : null, player.inVehicle ? (isMobile ? '互动' : 'E') : '');
+     return;
+   }
+   const item = loot.nearest(camera.position, 3.6);
+@@ -662,7 +754,18 @@ function animate(now = performance.now()) {
+   elapsed += dt;
+   fpsFrames += 1;
+   fpsTimer += dt;
+-  if (fpsTimer >= .5) { ui?.setFPS(fpsFrames / fpsTimer); fpsFrames = 0; fpsTimer = 0; }
++  if (fpsTimer >= .5) {
++    const fps = fpsFrames / fpsTimer;
++    ui?.setFPS(fps);
++    qualityTimer += fpsTimer;
++    if (isMobile && qualityTimer >= 5) {
++      qualityTimer = 0;
++      const current = renderer.getPixelRatio();
++      if (fps < 27 && current > .72) renderer.setPixelRatio(Math.max(.72, current - .12));
++      else if (fps > 48 && current < Math.min(devicePixelRatio, 1.0)) renderer.setPixelRatio(Math.min(1.0, current + .08));
++    }
++    fpsFrames = 0; fpsTimer = 0;
++  }
+ 
+   if (gameStarted && playing && player.alive) {
+     const forward = (keys.KeyW ? 1 : 0) - (keys.KeyS ? 1 : 0) + mobileMove.y;
+@@ -677,6 +780,8 @@ function animate(now = performance.now()) {
+     updateBuildGhost();
+     updateInteractionPrompt();
+     updateMission();
++    visibilityTimer += dt;
++    if (visibilityTimer > .55) { visibilityTimer = 0; world.updateProximityVisibility(camera.position); }
+     ui.updateVehicle(world.vehicle, player.inVehicle);
+ 
+     locationTimer += dt;
+@@ -691,19 +796,27 @@ function animate(now = performance.now()) {
+   renderer.render(scene, camera);
+ }
+ 
+-function saveGame() {
+-  if (!gameStarted || !player.alive) return;
+-  const data = {
+-    version: 1,
+-    savedAt: Date.now(),
+-    day, gameHours, weather, reachedTower,
+-    player: player.serialize(),
+-    inventory: inventory.serialize(),
+-    loot: loot.serialize(),
+-    zombies: zombies.serialize(),
+-    placedStructures
+-  };
+-  localStorage.setItem(SAVE_KEY, JSON.stringify(data));
++function saveGame(silent = false) {
++  if (!gameStarted || !player.alive) return false;
++  try {
++    const data = {
++      version: SAVE_VERSION,
++      savedAt: Date.now(),
++      day, gameHours, weather, weatherTimer, reachedTower,
++      player: player.serialize(),
++      inventory: inventory.serialize(),
++      loot: loot.serialize(),
++      zombies: zombies.serialize(),
++      worldState: world.serializeState(),
++      placedStructures
++    };
++    localStorage.setItem(SAVE_KEY, JSON.stringify(data));
++    return true;
++  } catch (error) {
++    console.error('存档写入失败', error);
++    if (!silent) ui?.message('存档写入失败，请检查存储空间', 'danger');
++    return false;
++  }
+ }
+ 
+ function loadGame() {
+@@ -711,17 +824,36 @@ function loadGame() {
+     const raw = localStorage.getItem(SAVE_KEY);
+     if (!raw) return false;
+     const data = JSON.parse(raw);
+-    day = data.day || 1;
+-    gameHours = data.gameHours ?? 8;
+-    weather = data.weather || 'clear';
++    if (!data || typeof data !== 'object') return false;
++    cancelBuild();
++    world.clearPlacedStructures();
++    day = Math.max(1, Number(data.day) || 1);
++    gameHours = THREE.MathUtils.clamp(Number(data.gameHours) || 8, 0, 23.999);
++    weather = ['clear', 'cloudy', 'fog', 'rain'].includes(data.weather) ? data.weather : 'clear';
++    weatherTimer = Math.max(15, Number(data.weatherTimer) || 110);
+     reachedTower = Boolean(data.reachedTower);
+     inventory.restore(data.inventory);
+     player.restore(data.player);
+     loot.restore(data.loot);
+     zombies.restore(data.zombies);
+-    placedStructures = Array.isArray(data.placedStructures) ? data.placedStructures : [];
+-    for (const build of placedStructures) world.createPlacedStructure(build.type, new THREE.Vector3().fromArray(build.position), build.rotation || 0);
++    world.restoreState(data.worldState);
++    const half = WORLD_SIZE * 0.49;
++    placedStructures = Array.isArray(data.placedStructures) ? data.placedStructures
++      .slice(0, 250)
++      .filter((b) => b && ['foundation','wall','campfire','workbench'].includes(b.type) && Array.isArray(b.position) && b.position.length >= 3 && b.position.every(Number.isFinite))
++      .map((b) => ({
++        type: b.type,
++        position: [
++          THREE.MathUtils.clamp(Number(b.position[0]), -half, half),
++          THREE.MathUtils.clamp(Number(b.position[1]), -20, 300),
++          THREE.MathUtils.clamp(Number(b.position[2]), -half, half)
++        ],
++        rotation: Number.isFinite(Number(b.rotation)) ? Number(b.rotation) : 0
++      })) : [];
++    for (const build of placedStructures) world.createPlacedStructure(build.type, new THREE.Vector3().fromArray(build.position), build.rotation);
+     world.refreshColliders();
++    world.updateProximityVisibility(player.camera.position);
++    ui.updateVehicle(world.vehicle, player.inVehicle);
+     return true;
+   } catch (error) {
+     console.error('存档读取失败', error);
+@@ -735,11 +867,17 @@ function handleDeath(source) {
+   ui.showDeath(source, zombies.kills, day);
+ }
+ 
++function onMouseLookVehicle(event) {
++  if (!player?.inVehicle || !playing || isMobile || !controls.isLocked) return;
++  player.vehicleLookYaw = THREE.MathUtils.clamp(player.vehicleLookYaw - event.movementX * 0.0022, -1.5, 1.5);
++  player.vehicleLookPitch = THREE.MathUtils.clamp(player.vehicleLookPitch - event.movementY * 0.0018, -0.55, 0.35);
++}
++
+ function onResize() {
+   camera.aspect = innerWidth / innerHeight;
+   camera.updateProjectionMatrix();
+   renderer.setSize(innerWidth, innerHeight);
