@@ -1,0 +1,235 @@
++    this.els.mobileAttack.textContent = building ? '放置' : driving ? '鸣笛' : '攻击';
++    this.els.mobileInteract.textContent = building ? '旋转' : driving ? '下车' : '互动';
++    this.els.mobileJump.textContent = driving ? '刹车' : '跳跃';
++    this.els.mobileReload.classList.toggle('hidden', building || driving);
++    this.els.mobileSprint.classList.toggle('hidden', building || driving);
++    this.els.mobileCancel.classList.toggle('hidden', !building);
+   }
+ 
+   showDeath(reason, kills, days) {
+diff --git a/src/world.js b/src/world.js
+index a0d923a..dc63664 100644
+--- a/src/world.js
++++ b/src/world.js
+@@ -17,14 +17,16 @@ function mat(key, color, roughness = 0.9, metalness = 0) {
+ }
+ 
+ export class World {
+-  constructor(scene) {
++  constructor(scene, options = {}) {
+     this.scene = scene;
++    this.mobile = Boolean(options.mobile);
+     this.random = mulberry32(WORLD_SEED);
+     this.colliders = [];
+     this.harvestables = [];
+     this.lootPoints = [];
+     this.interactables = [];
+     this.buildings = [];
++    this.placedGroups = [];
+     this.vehicle = null;
+     this.towns = [
+       { name: '灰港镇', x: -260, z: 150, radius: 150, ground: 2, type: 'civilian' },
+@@ -78,7 +80,7 @@ export class World {
+   }
+ 
+   createTerrain() {
+-    const segments = 150;
++    const segments = this.mobile ? 96 : 150;
+     const geometry = new THREE.PlaneGeometry(WORLD_SIZE, WORLD_SIZE, segments, segments);
+     geometry.rotateX(-Math.PI / 2);
+     const pos = geometry.attributes.position;
+@@ -143,7 +145,7 @@ export class World {
+     this.moon = new THREE.Mesh(new THREE.SphereGeometry(8, 12, 10), moonMat);
+     this.scene.add(this.moon);
+ 
+-    for (let i = 0; i < 18; i++) {
++    for (let i = 0; i < (this.mobile ? 10 : 18); i++) {
+       const cloud = new THREE.Group();
+       const pieces = 3 + Math.floor(this.random() * 4);
+       for (let j = 0; j < pieces; j++) {
+@@ -215,7 +217,13 @@ export class World {
+       this.createBuilding(town.x + dx, town.z + dz, w, d, color, name, town.type);
+     }
+ 
+-    if (town.type === 'military') this.createMilitaryFence(town);
++    if (town.type === 'military') {
++      this.createMilitaryFence(town);
++      this.lootPoints.push({
++        position: new THREE.Vector3(town.x + 5, town.ground + 0.65, town.z + 2),
++        table: 'military', guaranteed: 'keycard', used: false
++      });
++    }
+     for (let i = 0; i < (town.type === 'civilian' ? 18 : 10); i++) {
+       const a = this.random() * Math.PI * 2;
+       const r = 22 + this.random() * (town.radius * 0.6);
+@@ -350,21 +358,21 @@ export class World {
+   }
+ 
+   createNature() {
+-    const treeCount = 360;
++    const treeCount = this.mobile ? 210 : 360;
+     for (let i = 0; i < treeCount; i++) {
+       const x = (this.random() - 0.5) * (WORLD_SIZE - 90);
+       const z = (this.random() - 0.5) * (WORLD_SIZE - 90);
+       if (this.isNearTown(x, z, 1.1) || this.isRiver(x, z, 45)) continue;
+       this.createTree(x, z, 0.8 + this.random() * 0.75);
+     }
+-    const rockCount = 150;
++    const rockCount = this.mobile ? 85 : 150;
+     for (let i = 0; i < rockCount; i++) {
+       const x = (this.random() - 0.5) * (WORLD_SIZE - 70);
+       const z = (this.random() - 0.5) * (WORLD_SIZE - 70);
+       if (this.isNearTown(x, z, 0.75) || this.isRiver(x, z, 28)) continue;
+       this.createRock(x, z, 0.6 + this.random() * 1.6);
+     }
+-    for (let i = 0; i < 80; i++) {
++    for (let i = 0; i < (this.mobile ? 45 : 80); i++) {
+       const x = (this.random() - 0.5) * (WORLD_SIZE - 60);
+       const z = (this.random() - 0.5) * (WORLD_SIZE - 60);
+       if (this.isRiver(x, z, 20)) continue;
+@@ -390,7 +398,7 @@ export class World {
+       group.add(crown);
+     }
+     this.scene.add(group);
+-    this.harvestables.push({ type: 'tree', mesh: group, position: group.position.clone(), hp: 85, maxHp: 85, drops: { wood: 5 + Math.floor(scale * 4) } });
++    this.harvestables.push({ type: 'tree', mesh: group, position: group.position.clone(), hp: 85, maxHp: 85, harvested: false, nearVisible: true, drops: { wood: 5 + Math.floor(scale * 4) } });
+   }
+ 
+   createRock(x, z, scale = 1) {
+@@ -402,7 +410,7 @@ export class World {
+     mesh.castShadow = true;
+     mesh.receiveShadow = true;
+     this.scene.add(mesh);
+-    this.harvestables.push({ type: 'rock', mesh, position: mesh.position.clone(), hp: 110, maxHp: 110, drops: { stone: 3 + Math.floor(scale * 2), scrap: this.random() > 0.72 ? 1 : 0 } });
++    this.harvestables.push({ type: 'rock', mesh, position: mesh.position.clone(), hp: 110, maxHp: 110, harvested: false, nearVisible: true, drops: { stone: 3 + Math.floor(scale * 2), scrap: this.random() > 0.72 ? 1 : 0 } });
+   }
+ 
+   createBush(x, z) {
+@@ -416,7 +424,7 @@ export class World {
+     }
+     group.position.set(x, y, z);
+     this.scene.add(group);
+-    this.interactables.push({ type: 'bush', name: '野莓灌木', position: group.position.clone(), radius: 2.8, mesh: group, cooldown: 0 });
++    this.interactables.push({ type: 'bush', name: '野莓灌木', position: group.position.clone(), radius: 2.8, mesh: group, cooldown: 0, nearVisible: true });
+   }
+ 
+   createRadioTower() {
+@@ -482,7 +490,8 @@ export class World {
+       health: 100,
+       occupied: false,
+       maxSpeed: 35,
+-      turnSpeed: 1.25
++      turnSpeed: 1.25,
++      destroyedNotified: false
+     };
+     this.interactables.push({ type: 'vehicle', name: '旧越野车', position: group.position, radius: 5.5, vehicle: this.vehicle });
+   }
+@@ -547,6 +556,7 @@ export class World {
+     });
+     group.add(mesh);
+     this.scene.add(group);
++    this.placedGroups.push(group);
+     if (type === 'wall' || type === 'foundation' || type === 'workbench') {
+       group.updateMatrixWorld(true);
+       this.colliders.push({ box: new THREE.Box3().setFromObject(group), mesh: group, type: 'placed' });
+@@ -555,6 +565,91 @@ export class World {
+     return group;
+   }
+ 
++  clearPlacedStructures() {
++    const placed = new Set(this.placedGroups);
++    for (const group of placed) this.scene.remove(group);
++    this.colliders = this.colliders.filter((c) => !placed.has(c.mesh) && !placed.has(c.parent));
++    this.interactables = this.interactables.filter((inter) => !placed.has(inter.mesh));
++    this.placedGroups = [];
++  }
++
++  isPositionBlocked(position, radius = 0.5) {
++    const half = WORLD_SIZE * 0.49;
++    if (Math.abs(position.x) > half || Math.abs(position.z) > half) return true;
++    for (const c of this.colliders) {
++      const b = c.box;
++      if (position.x > b.min.x - radius && position.x < b.max.x + radius && position.z > b.min.z - radius && position.z < b.max.z + radius) return true;
++    }
++    return false;
++  }
++
++  raycastObstacle(origin, direction, maxDistance) {
++    const ray = new THREE.Ray(origin, direction.clone().normalize());
++    const hit = new THREE.Vector3();
++    let best = maxDistance;
++    for (const c of this.colliders) {
++      if (!ray.intersectBox(c.box, hit)) continue;
++      const distance = origin.distanceTo(hit);
++      if (distance > 0.15 && distance < best) best = distance;
++    }
++    return best;
++  }
++
++  updateProximityVisibility(position) {
++    const harvestRange = this.mobile ? 230 : 430;
++    const bushRange = this.mobile ? 190 : 360;
++    const harvestSq = harvestRange * harvestRange;
++    const bushSq = bushRange * bushRange;
++    for (const h of this.harvestables) {
++      h.nearVisible = h.position.distanceToSquared(position) <= harvestSq;
++      h.mesh.visible = !h.harvested && h.nearVisible;
++    }
++    for (const inter of this.interactables) {
++      if (inter.type !== 'bush') continue;
++      inter.nearVisible = inter.position.distanceToSquared(position) <= bushSq;
++      inter.mesh.visible = inter.cooldown <= 0 && inter.nearVisible;
++    }
++  }
++
++  serializeState() {
++    return {
++      harvestables: this.harvestables.map((h) => ({ hp: h.hp, harvested: h.harvested })),
++      bushes: this.interactables.filter((i) => i.type === 'bush').map((b) => ({ cooldown: b.cooldown }))
++    };
++  }
++
++  restoreState(data) {
++    if (Array.isArray(data?.harvestables)) {
++      data.harvestables.slice(0, this.harvestables.length).forEach((entry, i) => {
++        const h = this.harvestables[i];
++        h.hp = THREE.MathUtils.clamp(Number(entry.hp) || h.maxHp, 0, h.maxHp);
++        h.harvested = Boolean(entry.harvested) || h.hp <= 0;
++        h.mesh.visible = !h.harvested && h.nearVisible;
++      });
++    }
++    const bushes = this.interactables.filter((i) => i.type === 'bush');
++    if (Array.isArray(data?.bushes)) {
++      data.bushes.slice(0, bushes.length).forEach((entry, i) => {
++        bushes[i].cooldown = Math.max(0, Number(entry.cooldown) || 0);
++        bushes[i].mesh.visible = bushes[i].cooldown <= 0 && bushes[i].nearVisible;
++      });
++    }
++  }
++
++  resetDynamicState() {
++    for (const h of this.harvestables) {
++      h.hp = h.maxHp;
++      h.harvested = false;
++      h.mesh.visible = h.nearVisible;
++    }
++    for (const b of this.interactables) {
++      if (b.type !== 'bush') continue;
++      b.cooldown = 0;
++      b.mesh.visible = b.nearVisible;
++    }
++    this.clearPlacedStructures();
++  }
++
+   addCollider(mesh, parent) {
+     parent.updateMatrixWorld(true);
+     const box = new THREE.Box3().setFromObject(mesh);
+@@ -602,7 +697,7 @@ export class World {
+     for (const inter of this.interactables) {
+       if (inter.type === 'bush' && inter.cooldown > 0) {
+         inter.cooldown = Math.max(0, inter.cooldown - dt);
+-        inter.mesh.visible = inter.cooldown <= 0;
++        inter.mesh.visible = inter.cooldown <= 0 && inter.nearVisible;
+       }
+       if (inter.type === 'campfire' && inter.mesh?.userData?.flame) {
+         inter.mesh.userData.flame.scale.y = 0.8 + Math.sin(performance.now() * 0.012) * 0.18;
