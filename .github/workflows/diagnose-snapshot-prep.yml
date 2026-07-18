@@ -1,0 +1,64 @@
+name: Diagnose Snapshot Preparation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/diagnose-snapshot-prep.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ashen-source-diagnostic
+          path: /tmp/ashen-snapshot
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          repository: w2334681436-wang/phainon-emberfall
+          run-id: 29626886400
+      - name: Diagnose preparation
+        shell: bash
+        run: |
+          set +e
+          exec > >(tee /tmp/snapshot-prep.log) 2>&1
+          set -x
+          find /tmp/ashen-snapshot -maxdepth 3 -type f -printf '%p %s\n'
+          rm -rf /tmp/ashen-extracted tools/ashen-snapshot-diagnose
+          mkdir -p /tmp/ashen-extracted tools/ashen-snapshot-diagnose
+          tar -xzvf /tmp/ashen-snapshot/ashen-diagnose.tar.gz -C /tmp/ashen-extracted
+          echo TAR=$?
+          find /tmp/ashen-extracted -maxdepth 5 -type f -printf '%p %s\n'
+          cp -a /tmp/ashen-extracted/tools/ashen-diagnose/web tools/ashen-snapshot-diagnose/web
+          echo COPY=$?
+          base64 --decode tools/ashen-apk-v121-compat/ui-correction.patch.gz.b64 > /tmp/ui.gz
+          echo B64=$?
+          gzip -t /tmp/ui.gz
+          echo GZIPTEST=$?
+          gzip -dc /tmp/ui.gz > /tmp/ui.patch
+          echo GZIPDECODE=$?
+          wc -c /tmp/ui.patch
+          (cd tools/ashen-snapshot-diagnose/web && patch --dry-run --batch --forward -p1 < /tmp/ui.patch)
+          echo PATCHDRY=$?
+          (cd tools/ashen-snapshot-diagnose/web && patch --batch --forward -p1 < /tmp/ui.patch)
+          echo PATCH=$?
+          rm -f tools/ashen-snapshot-diagnose/web/src/ui.js.orig tools/ashen-snapshot-diagnose/web/package-lock.json
+          stat -c '%n %s' tools/ashen-snapshot-diagnose/web/src/ui.js
+          node -p "require('./tools/ashen-snapshot-diagnose/web/package.json').version"
+          echo NODE=$?
+          grep -n 'compass-track\|threat-indicator\|GAME_VERSION' tools/ashen-snapshot-diagnose/web/src/ui.js tools/ashen-snapshot-diagnose/web/src/data.js
+          echo GREP=$?
+          cp /tmp/snapshot-prep.log tools/ashen-snapshot-diagnose/snapshot-prep.log
+          tar -czf snapshot-prep-diagnostic.tar.gz tools/ashen-snapshot-diagnose
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: snapshot-prep-diagnostic
+          path: snapshot-prep-diagnostic.tar.gz
+          retention-days: 3

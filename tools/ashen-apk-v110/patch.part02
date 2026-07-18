@@ -1,0 +1,135 @@
+his.inVehicle,
+       vehicle: this.world.vehicle ? { position: this.world.vehicle.mesh.position.toArray(), rotationY: this.world.vehicle.mesh.rotation.y, fuel: this.world.vehicle.fuel, health: this.world.vehicle.health } : null
+     };
+   }
+ 
+   restore(data) {
+     if (!data) return;
+-    if (Array.isArray(data.position)) this.camera.position.fromArray(data.position);
+-    this.health = data.health ?? 100;
+-    this.hunger = data.hunger ?? 100;
+-    this.thirst = data.thirst ?? 100;
+-    this.stamina = data.stamina ?? 100;
+-    this.infection = data.infection ?? 0;
+-    this.distanceTravelled = data.distanceTravelled || 0;
++    if (Array.isArray(data.position) && data.position.every(Number.isFinite)) this.camera.position.fromArray(data.position);
++    if (Array.isArray(data.rotation) && data.rotation.every(Number.isFinite)) this.camera.rotation.set(data.rotation[0], data.rotation[1], data.rotation[2], 'YXZ');
++    this.health = THREE.MathUtils.clamp(Number(data.health) || 100, 1, 100);
++    this.hunger = THREE.MathUtils.clamp(Number(data.hunger) || 0, 0, 100);
++    this.thirst = THREE.MathUtils.clamp(Number(data.thirst) || 0, 0, 100);
++    this.stamina = THREE.MathUtils.clamp(Number(data.stamina) || 0, 0, 100);
++    this.infection = THREE.MathUtils.clamp(Number(data.infection) || 0, 0, 100);
++    this.distanceTravelled = Math.max(0, Number(data.distanceTravelled) || 0);
++    const half = WORLD_SIZE * 0.49;
++    this.camera.position.x = THREE.MathUtils.clamp(this.camera.position.x, -half, half);
++    this.camera.position.z = THREE.MathUtils.clamp(this.camera.position.z, -half, half);
++    const minimumY = this.world.terrainHeight(this.camera.position.x, this.camera.position.z) + PLAYER_HEIGHT;
++    if (!Number.isFinite(this.camera.position.y) || this.camera.position.y < minimumY - 3 || this.camera.position.y > 300) this.camera.position.y = minimumY;
++    this.alive = true;
++    this.inVehicle = Boolean(data.inVehicle);
++    this.lastSafePosition.copy(this.camera.position);
+     if (data.vehicle && this.world.vehicle) {
+-      this.world.vehicle.mesh.position.fromArray(data.vehicle.position);
+-      this.world.vehicle.mesh.rotation.y = data.vehicle.rotationY || 0;
+-      this.world.vehicle.fuel = data.vehicle.fuel ?? 62;
+-      this.world.vehicle.health = data.vehicle.health ?? 100;
++      if (Array.isArray(data.vehicle.position) && data.vehicle.position.every(Number.isFinite)) {
++        this.world.vehicle.mesh.position.fromArray(data.vehicle.position);
++        const half = WORLD_SIZE * 0.485;
++        this.world.vehicle.mesh.position.x = THREE.MathUtils.clamp(this.world.vehicle.mesh.position.x, -half, half);
++        this.world.vehicle.mesh.position.z = THREE.MathUtils.clamp(this.world.vehicle.mesh.position.z, -half, half);
++        this.world.vehicle.mesh.position.y = this.world.terrainHeight(this.world.vehicle.mesh.position.x, this.world.vehicle.mesh.position.z) + 0.1;
++      }
++      this.world.vehicle.mesh.rotation.y = Number.isFinite(Number(data.vehicle.rotationY)) ? Number(data.vehicle.rotationY) : 0;
++      this.world.vehicle.fuel = THREE.MathUtils.clamp(Number(data.vehicle.fuel) || 0, 0, 100);
++      this.world.vehicle.health = THREE.MathUtils.clamp(data.vehicle.health ?? 100, 0, 100);
++      this.world.vehicle.speed = 0;
++      this.world.vehicle.occupied = this.inVehicle && this.world.vehicle.health > 0;
++      if (this.world.vehicle.health <= 0) this.inVehicle = false;
+     }
+   }
+ }
+@@ -381,14 +478,14 @@ export class LootManager {
+ 
+   spawnInitial() {
+     for (const point of this.world.lootPoints) {
+-      if (Math.random() > 0.78) continue;
+-      const id = weightedLoot(point.table);
++      if (!point.guaranteed && Math.random() > 0.78) continue;
++      const id = point.guaranteed || weightedLoot(point.table);
+       const qty = ITEM_DEFS[id].type === 'ammo' ? 4 + Math.floor(Math.random() * 10) : ITEM_DEFS[id].type === 'material' ? 1 + Math.floor(Math.random() * 4) : 1;
+       this.spawn(id, qty, point.position, point);
+     }
+   }
+ 
+-  spawn(id, qty, position, source = null) {
++  spawn(id, qty, position, source = null, options = {}) {
+     const def = ITEM_DEFS[id];
+     if (!def) return null;
+     const material = new THREE.MeshStandardMaterial({ color: def.color, roughness: 0.52, metalness: def.type === 'gun' ? 0.35 : 0.05, emissive: new THREE.Color(def.color).multiplyScalar(0.05) });
+@@ -398,7 +495,8 @@ export class LootManager {
+     mesh.castShadow = true;
+     mesh.userData.loot = true;
+     this.scene.add(mesh);
+-    const item = { id, qty, mesh, baseY: mesh.position.y, phase: Math.random() * Math.PI * 2, source };
++    const mag = def.type === 'gun' ? Math.max(0, Math.min(def.magSize, options.mag ?? Math.floor(def.magSize * (0.2 + Math.random() * 0.45)))) : undefined;
++    const item = { id, qty, mag, mesh, baseY: mesh.position.y, phase: Math.random() * Math.PI * 2, source };
+     this.items.push(item);
+     if (source) source.used = true;
+     return item;
+@@ -426,7 +524,7 @@ export class LootManager {
+ 
+   pickup(item) {
+     if (!item) return false;
+-    const added = this.inventory.addItem(item.id, item.qty);
++    const added = this.inventory.addItem(item.id, item.qty, { mag: item.mag });
+     if (added <= 0) {
+       this.callbacks.message?.('背包已满');
+       return false;
+@@ -449,7 +547,7 @@ export class LootManager {
+   }
+ 
+   serialize() {
+-    return this.items.map((item) => ({ id: item.id, qty: item.qty, position: item.mesh.position.toArray() }));
++    return this.items.map((item) => ({ id: item.id, qty: item.qty, mag: item.mag, position: item.mesh.position.toArray() }));
+   }
+ 
+   restore(data) {
+@@ -459,7 +557,26 @@ export class LootManager {
+       item.mesh.material.dispose();
+     }
+     this.items = [];
+-    for (const entry of data) this.spawn(entry.id, entry.qty, new THREE.Vector3().fromArray(entry.position));
++    for (const entry of data) {
++      const def = ITEM_DEFS[entry?.id];
++      if (!def || !Array.isArray(entry.position) || !entry.position.every(Number.isFinite)) continue;
++      const half = WORLD_SIZE * 0.49;
++      const position = new THREE.Vector3().fromArray(entry.position);
++      position.x = THREE.MathUtils.clamp(position.x, -half, half);
++      position.z = THREE.MathUtils.clamp(position.z, -half, half);
++      const qty = Math.max(1, Math.min(def.stack, Number(entry.qty) || 1));
++      this.spawn(entry.id, qty, position, null, { mag: entry.mag });
++    }
++  }
++
++  resetInitial() {
++    for (const item of [...this.items]) {
++      this.scene.remove(item.mesh);
++      item.mesh.material.dispose();
++    }
++    this.items = [];
++    for (const point of this.world.lootPoints) point.used = false;
++    this.spawnInitial();
+   }
+ }
+ 
+@@ -472,6 +589,7 @@ export class ZombieManager {
+     this.callbacks = callbacks;
+     this.zombies = [];
+     this.kills = 0;
++    this.mobile = Boolean(callbacks.mobile);
+     this.spawnWave();
+   }
+ 
+@@ -483,11 +601,11 @@ export class ZombieManager {
+         this.spawn(

@@ -1,0 +1,313 @@
++    this.health = THREE.MathUtils.clamp(Number(data.health) || 100, 1, 100);
++    this.hunger = THREE.MathUtils.clamp(Number(data.hunger) || 0, 0, 100);
++    this.thirst = THREE.MathUtils.clamp(Number(data.thirst) || 0, 0, 100);
++    this.stamina = THREE.MathUtils.clamp(Number(data.stamina) || 0, 0, 100);
++    this.infection = THREE.MathUtils.clamp(Number(data.infection) || 0, 0, 100);
++    this.distanceTravelled = Math.max(0, Number(data.distanceTravelled) || 0);
++    const half = WORLD_SIZE * 0.49;
++    this.camera.position.x = THREE.MathUtils.clamp(this.camera.position.x, -half, half);
++    this.camera.position.z = THREE.MathUtils.clamp(this.camera.position.z, -half, half);
++    const minimumY = this.world.terrainHeight(this.camera.position.x, this.camera.position.z) + PLAYER_HEIGHT;
++    if (!Number.isFinite(this.camera.position.y) || this.camera.position.y < minimumY - 3 || this.camera.position.y > 300) this.camera.position.y = minimumY;
++    this.alive = true;
++    this.inVehicle = Boolean(data.inVehicle);
++    this.lastSafePosition.copy(this.camera.position);
+     if (data.vehicle && this.world.vehicle) {
+-      this.world.vehicle.mesh.position.fromArray(data.vehicle.position);
+-      this.world.vehicle.mesh.rotation.y = data.vehicle.rotationY || 0;
+-      this.world.vehicle.fuel = data.vehicle.fuel ?? 62;
+-      this.world.vehicle.health = data.vehicle.health ?? 100;
++      if (Array.isArray(data.vehicle.position) && data.vehicle.position.every(Number.isFinite)) {
++        this.world.vehicle.mesh.position.fromArray(data.vehicle.position);
++        const half = WORLD_SIZE * 0.485;
++        this.world.vehicle.mesh.position.x = THREE.MathUtils.clamp(this.world.vehicle.mesh.position.x, -half, half);
++        this.world.vehicle.mesh.position.z = THREE.MathUtils.clamp(this.world.vehicle.mesh.position.z, -half, half);
++        this.world.vehicle.mesh.position.y = this.world.terrainHeight(this.world.vehicle.mesh.position.x, this.world.vehicle.mesh.position.z) + 0.1;
++      }
++      this.world.vehicle.mesh.rotation.y = Number.isFinite(Number(data.vehicle.rotationY)) ? Number(data.vehicle.rotationY) : 0;
++      this.world.vehicle.fuel = THREE.MathUtils.clamp(Number(data.vehicle.fuel) || 0, 0, 100);
++      this.world.vehicle.health = THREE.MathUtils.clamp(data.vehicle.health ?? 100, 0, 100);
++      this.world.vehicle.speed = 0;
++      this.world.vehicle.occupied = this.inVehicle && this.world.vehicle.health > 0;
++      if (this.world.vehicle.health <= 0) this.inVehicle = false;
+     }
+   }
+ }
+@@ -381,14 +478,14 @@ export class LootManager {
+ 
+   spawnInitial() {
+     for (const point of this.world.lootPoints) {
+-      if (Math.random() > 0.78) continue;
+-      const id = weightedLoot(point.table);
++      if (!point.guaranteed && Math.random() > 0.78) continue;
++      const id = point.guaranteed || weightedLoot(point.table);
+       const qty = ITEM_DEFS[id].type === 'ammo' ? 4 + Math.floor(Math.random() * 10) : ITEM_DEFS[id].type === 'material' ? 1 + Math.floor(Math.random() * 4) : 1;
+       this.spawn(id, qty, point.position, point);
+     }
+   }
+ 
+-  spawn(id, qty, position, source = null) {
++  spawn(id, qty, position, source = null, options = {}) {
+     const def = ITEM_DEFS[id];
+     if (!def) return null;
+     const material = new THREE.MeshStandardMaterial({ color: def.color, roughness: 0.52, metalness: def.type === 'gun' ? 0.35 : 0.05, emissive: new THREE.Color(def.color).multiplyScalar(0.05) });
+@@ -398,7 +495,8 @@ export class LootManager {
+     mesh.castShadow = true;
+     mesh.userData.loot = true;
+     this.scene.add(mesh);
+-    const item = { id, qty, mesh, baseY: mesh.position.y, phase: Math.random() * Math.PI * 2, source };
++    const mag = def.type === 'gun' ? Math.max(0, Math.min(def.magSize, options.mag ?? Math.floor(def.magSize * (0.2 + Math.random() * 0.45)))) : undefined;
++    const item = { id, qty, mag, mesh, baseY: mesh.position.y, phase: Math.random() * Math.PI * 2, source };
+     this.items.push(item);
+     if (source) source.used = true;
+     return item;
+@@ -426,7 +524,7 @@ export class LootManager {
+ 
+   pickup(item) {
+     if (!item) return false;
+-    const added = this.inventory.addItem(item.id, item.qty);
++    const added = this.inventory.addItem(item.id, item.qty, { mag: item.mag });
+     if (added <= 0) {
+       this.callbacks.message?.('背包已满');
+       return false;
+@@ -449,7 +547,7 @@ export class LootManager {
+   }
+ 
+   serialize() {
+-    return this.items.map((item) => ({ id: item.id, qty: item.qty, position: item.mesh.position.toArray() }));
++    return this.items.map((item) => ({ id: item.id, qty: item.qty, mag: item.mag, position: item.mesh.position.toArray() }));
+   }
+ 
+   restore(data) {
+@@ -459,7 +557,26 @@ export class LootManager {
+       item.mesh.material.dispose();
+     }
+     this.items = [];
+-    for (const entry of data) this.spawn(entry.id, entry.qty, new THREE.Vector3().fromArray(entry.position));
++    for (const entry of data) {
++      const def = ITEM_DEFS[entry?.id];
++      if (!def || !Array.isArray(entry.position) || !entry.position.every(Number.isFinite)) continue;
++      const half = WORLD_SIZE * 0.49;
++      const position = new THREE.Vector3().fromArray(entry.position);
++      position.x = THREE.MathUtils.clamp(position.x, -half, half);
++      position.z = THREE.MathUtils.clamp(position.z, -half, half);
++      const qty = Math.max(1, Math.min(def.stack, Number(entry.qty) || 1));
++      this.spawn(entry.id, qty, position, null, { mag: entry.mag });
++    }
++  }
++
++  resetInitial() {
++    for (const item of [...this.items]) {
++      this.scene.remove(item.mesh);
++      item.mesh.material.dispose();
++    }
++    this.items = [];
++    for (const point of this.world.lootPoints) point.used = false;
++    this.spawnInitial();
+   }
+ }
+ 
+@@ -472,6 +589,7 @@ export class ZombieManager {
+     this.callbacks = callbacks;
+     this.zombies = [];
+     this.kills = 0;
++    this.mobile = Boolean(callbacks.mobile);
+     this.spawnWave();
+   }
+ 
+@@ -483,11 +601,11 @@ export class ZombieManager {
+         this.spawn(x + Math.cos(a) * r, z + Math.sin(a) * r, tier);
+       }
+     };
+-    spawnAround(-260, 150, 20, 'civilian');
+-    spawnAround(220, -250, 12, 'police');
+-    spawnAround(440, 360, 20, 'military');
+-    spawnAround(-440, -360, 10, 'civilian');
+-    for (let i = 0; i < 14; i++) this.spawn((Math.random() - 0.5) * 1300, (Math.random() - 0.5) * 1300, 'civilian');
++    spawnAround(-260, 150, this.mobile ? 14 : 20, 'civilian');
++    spawnAround(220, -250, this.mobile ? 8 : 12, 'police');
++    spawnAround(440, 360, this.mobile ? 14 : 20, 'military');
++    spawnAround(-440, -360, this.mobile ? 7 : 10, 'civilian');
++    for (let i = 0; i < (this.mobile ? 8 : 14); i++) this.spawn((Math.random() - 0.5) * 1300, (Math.random() - 0.5) * 1300, 'civilian');
+   }
+ 
+   spawn(x, z, tier = 'civilian') {
+@@ -543,12 +661,12 @@ export class ZombieManager {
+       z.attackCooldown -= dt;
+       z.hitFlash = Math.max(0, z.hitFlash - dt);
+       const d = z.mesh.position.distanceTo(playerPos);
+-      if (d > 260) {
++      if (d > (this.mobile ? 200 : 280)) {
+         z.mesh.visible = false;
+         continue;
+       }
+       z.mesh.visible = true;
+-      const detect = isNight ? 44 : 60;
++      const detect = isNight ? 72 : 60;
+       const targetVehicle = this.player.inVehicle && d < 90;
+       if (d < detect || z.alert > 0 || targetVehicle) {
+         z.alert = Math.max(z.alert, 7);
+@@ -558,7 +676,11 @@ export class ZombieManager {
+         z.mesh.rotation.y = Math.atan2(dir.x, dir.z);
+         if (d > 1.85) {
+           const speed = z.speed * (isNight ? 1.12 : 1);
+-          z.mesh.position.addScaledVector(dir, speed * dt);
++          const step = dir.clone().multiplyScalar(speed * dt);
++          const nextX = z.mesh.position.clone(); nextX.x += step.x;
++          if (!this.world.isPositionBlocked(nextX, 0.55)) z.mesh.position.x = nextX.x;
++          const nextZ = z.mesh.position.clone(); nextZ.z += step.z;
++          if (!this.world.isPositionBlocked(nextZ, 0.55)) z.mesh.position.z = nextZ.z;
+         } else if (z.attackCooldown <= 0) {
+           if (this.player.inVehicle) {
+             this.world.vehicle.health = Math.max(0, this.world.vehicle.health - z.damage * 0.4);
+@@ -667,11 +789,42 @@ export class ZombieManager {
+     z.alert = 0;
+   }
+ 
++  vehicleImpact(vehicle) {
++    const speed = Math.abs(vehicle.speed);
++    if (speed < 6) return;
++    for (const z of this.zombies) {
++      if (z.dead || z.mesh.position.distanceTo(vehicle.mesh.position) > 3.8) continue;
++      this.damageZombie(z, Math.max(30, speed * 4.5), false);
++      vehicle.health = Math.max(0, vehicle.health - 1.5);
++      vehicle.speed *= 0.88;
++    }
++  }
++
+   serialize() {
+-    return { kills: this.kills };
++    return {
++      kills: this.kills,
++      entries: this.zombies.map((z) => ({ position: z.mesh.position.toArray(), hp: z.hp, dead: z.dead, respawnTimer: z.respawnTimer, alert: z.alert }))
++    };
+   }
+ 
+   restore(data) {
+-    this.kills = data?.kills || 0;
++    this.kills = Math.max(0, Number(data?.kills) || 0);
++    if (!Array.isArray(data?.entries)) return;
++    data.entries.slice(0, this.zombies.length).forEach((entry, i) => {
++      const z = this.zombies[i];
++      if (Array.isArray(entry.position) && entry.position.every(Number.isFinite)) z.mesh.position.fromArray(entry.position);
++      z.hp = THREE.MathUtils.clamp(Number(entry.hp) || z.maxHp, 0, z.maxHp);
++      z.dead = Boolean(entry.dead) || z.hp <= 0;
++      z.respawnTimer = Math.max(0, Number(entry.respawnTimer) || 0);
++      z.alert = Math.max(0, Number(entry.alert) || 0);
++      z.mesh.visible = !z.dead;
++    });
++  }
++
++  reset() {
++    for (const z of this.zombies) this.scene.remove(z.mesh);
++    this.zombies = [];
++    this.kills = 0;
++    this.spawnWave();
+   }
+ }
+diff --git a/src/main.js b/src/main.js
+index f2c9ee5..e6fbfb2 100644
+--- a/src/main.js
++++ b/src/main.js
+@@ -7,6 +7,7 @@ import { ITEM_DEFS, PLAYER_HEIGHT, RECIPES } from './data.js';
+ import './styles.css';
+ 
+ const SAVE_KEY = 'ashen-frontier-save-v1';
++const SAVE_VERSION = 2;
+ const isMobile = matchMedia('(pointer: coarse)').matches || /Android|iPhone|iPad/i.test(navigator.userAgent);
+ const root = document.getElementById('app');
+ 
+@@ -39,6 +40,10 @@ let buildRotation = 0;
+ let buildGhost = null;
+ let placedStructures = [];
+ let currentInteraction = null;
++let craftingStation = 'hand';
++let visibilityTimer = 0;
++let qualityTimer = 0;
++let mobileSprintHeld = false;
+ let weaponModel = null;
+ let weaponRecoil = 0;
+ let rain = null;
+@@ -60,8 +65,8 @@ function init() {
+   camera.rotation.order = 'YXZ';
+   scene.add(camera);
+ 
+-  renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+-  renderer.setPixelRatio(Math.min(devicePixelRatio, isMobile ? 1.25 : 1.7));
++  renderer = new THREE.WebGLRenderer({ antialias: !isMobile, powerPreference: 'high-performance', preserveDrawingBuffer: false });
++  renderer.setPixelRatio(Math.min(devicePixelRatio, isMobile ? 1.0 : 1.55));
+   renderer.setSize(innerWidth, innerHeight);
+   renderer.shadowMap.enabled = !isMobile;
+   renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+@@ -70,12 +75,12 @@ function init() {
+   renderer.toneMappingExposure = 1.02;
+ 
+   controls = new PointerLockControls(camera, renderer.domElement);
+-  world = new World(scene);
++  world = new World(scene, { mobile: isMobile });
+   addLights();
+   createRain();
+ 
+   inventory = new Inventory(() => {
+-    ui?.updateInventory(inventory);
++    ui?.updateInventory(inventory, craftingStation);
+     updateWeaponModel();
+   });
+ 
+@@ -85,11 +90,13 @@ function init() {
+     hurt: (amount, source) => ui?.hurt(amount, source),
+     death: (source) => handleDeath(source),
+     sound: playSound,
+-    vehicle: (v) => ui?.updateVehicle(v, true)
++    vehicle: (v) => ui?.updateVehicle(v, true),
++    vehicleImpact: (v) => zombies?.vehicleImpact(v)
+   });
+ 
+   loot = new LootManager(scene, world, inventory, { message: (t) => ui?.message(t), sound: playSound });
+   zombies = new ZombieManager(scene, world, player, loot, {
++    mobile: isMobile,
+     sound: playSound,
+     hit: (_damage, headshot) => { ui?.hit(headshot); playSound(headshot ? 'headshot' : 'hit'); },
+     kill: () => { ui?.message('感染者已被消灭', 'success'); updateMission(); }
+@@ -98,7 +105,7 @@ function init() {
+   ui = new GameUI(root, {
+     start: startGame,
+     resume: resumeGame,
+-    save: () => { saveGame(); ui.message('进度已保存', 'success'); },
++    save: () => { if (saveGame()) ui.message('进度已保存', 'success'); },
+     restart: restartGame,
+     respawn: respawnPlayer,
+     closeInventory: () => toggleInventory(false),
+@@ -124,12 +131,49 @@ function init() {
+     craft: handleCraft
+   });
+   ui.els.renderHost.appendChild(renderer.domElement);
+-  ui.showStart(Boolean(localStorage.getItem(SAVE_KEY)));
+-  ui.updateInventory(inventory);
++  renderer.domElement.addEventListener('webglcontextlost', (event) => { event.preventDefault(); playing = false; ui?.message('图形环境暂时中断，请切回应用后重试', 'danger'); });
++  renderer.domElement.addEventListener('webglcontextrestored', () => { if (gameStarted && player.alive && !ui.inventoryOpen) playing = true; ui?.message('图形环境已恢复', 'success'); });
++  let hasSave = false;
++  try { hasSave = Boolean(localStorage.getItem(SAVE_KEY)); } catch (error) { console.warn('本地存储不可用', error); }
++  ui.showStart(hasSave);
++  ui.updateInventory(inventory, craftingStation);
+   ui.updateStats(player);
+   updateWeaponModel();
+   bindEvents();
+   animate();
++  if (globalThis.__ASHEN_ENABLE_TESTS__) installTestHooks();
++}
++
++function installTestHooks() {
++  window.__ASHEN_TEST__ = {
++    getState: () => ({
++      playing, gameStarted, day, gameHours, weather, reachedTower, activeBuild: activeBuild?.build || null,
++      player: { position: player.camera.position.toArray(), health: player.health, stamina: player.stamina, inVehicle: player.inVehicle, reloadTimer: player.reloadTimer },
++      inventory: inventory.serialize(), placedCount: placedStructures.length,
++      vehicle: world.vehicle ? { position: world.vehicle.mesh.position.toArray(), speed: world.vehicle.speed, fuel: world.vehicle.fuel, health: world.vehicle.health } : null,
++      zombies: { count: zombies.zombies.length, kills: zombies.kills },
++      guaranteedKeycards: loot.items.filter((item) => item.id === 'keycard').length,
++      harvested: world.harvestables.filter((h) => h.harvested).length
++    }),
++    give: (id, qty = 1) => inventory.addItem(id, qty),
++    select: (index) => inventory.select(index),
++    teleport: (x, z) => { player.camera.position.set(x, world.terrainHeight(x, z) + PLAYER_HEIGHT, z); player.lastSafePosition.copy(player.camera.position); world.updateProximityVisibility(player.camera.position); },
