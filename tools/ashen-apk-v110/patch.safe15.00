@@ -36,26 +36,7 @@ index 4534d55..f934c3b 100644
 +## 质量验证
 +
 +生产构建、桌面端与移动端 WebGL 冒烟测试、移动端建造与车辆测试、制作事务测试、换弹目标测试、世界状态存档恢复测试和 Android 返回键测试均已通过。
-diff --git a/package-lock.json b/package-lock.json
-index f35ac8e..381a282 100644
---- a/package-lock.json
-+++ b/package-lock.json
-@@ -1,12 +1,12 @@
- {
-   "name": "ashen-frontier",
--  "version": "1.0.0",
-+  "version": "1.1.0",
-   "lockfileVersion": 3,
-   "requires": true,
-   "packages": {
-     "": {
-       "name": "ashen-frontier",
--      "version": "1.0.0",
-+      "version": "1.1.0",
-       "dependencies": {
-         "three": "^0.180.0"
-       },
-diff --git a/package.json b/package.json
+ diff --git a/package.json b/package.json
 index d7b4b9a..198b299 100644
 --- a/package.json
 +++ b/package.json
@@ -349,3 +330,53 @@ index 09d26fc..5815d27 100644
 -    this.distanceTravelled = data.distanceTravelled || 0;
 +    if (Array.isArray(data.position) && data.position.every(Number.isFinite)) this.camera.position.fromArray(data.position);
 +    if (Array.isArray(data.rotation) && data.rotation.every(Number.isFinite)) this.camera.rotation.set(data.rotation[0], data.rotation[1], data.rotation[2], 'YXZ');
++    this.health = THREE.MathUtils.clamp(Number(data.health) || 100, 1, 100);
++    this.hunger = THREE.MathUtils.clamp(Number(data.hunger) || 100, 0, 100);
++    this.thirst = THREE.MathUtils.clamp(Number(data.thirst) || 100, 0, 100);
++    this.stamina = THREE.MathUtils.clamp(Number(data.stamina) || 100, 0, 100);
++    this.infection = THREE.MathUtils.clamp(Number(data.infection) || 0, 0, 100);
++    this.distanceTravelled = Math.max(0, Number(data.distanceTravelled) || 0);
+     if (this.world.vehicle && data.vehicle) {
+-      this.world.vehicle.mesh.position.fromArray(data.vehicle.position || this.world.vehicle.mesh.position.toArray());
+-      this.world.vehicle.mesh.rotation.y = data.vehicle.rotationY || 0;
+-      this.world.vehicle.fuel = data.vehicle.fuel ?? 34;
+-      this.world.vehicle.health = data.vehicle.health ?? 62;
++      if (Array.isArray(data.vehicle.position) && data.vehicle.position.every(Number.isFinite)) this.world.vehicle.mesh.position.fromArray(data.vehicle.position);
++      this.world.vehicle.mesh.rotation.y = Number(data.vehicle.rotationY) || 0;
++      this.world.vehicle.fuel = THREE.MathUtils.clamp(Number(data.vehicle.fuel) || 0, 0, 100);
++      this.world.vehicle.health = THREE.MathUtils.clamp(Number(data.vehicle.health) || 0, 0, 100);
++      this.world.vehicle.speed = 0;
+     }
++    if (data.inVehicle && this.world.vehicle?.health > 0) this.enterVehicle();
+   }
+ }
+ 
+@@ -377,6 +474,7 @@ export class Infected {
+     this.attackTimer = 0;
+     this.wanderTimer = Math.random() * 4;
+     this.speed = type === 'crawler' ? 3.4 : type === 'military' ? 2.25 : 1.75;
++    this.deadTimer = 0;
+     const bodyColor = type === 'military' ? 0x3a5140 : type === 'crawler' ? 0x67443b : 0x4b5b64;
+     this.mesh = new THREE.Group();
+     const body = new THREE.Mesh(new THREE.BoxGeometry(1.05, 1.6, 0.65), new THREE.MeshStandardMaterial({ color: bodyColor, roughness: 0.94 }));
+@@ -416,6 +514,7 @@ export class Infected {
+   update(dt, player, noise = 0) {
+     if (!this.alive) return;
++    if (!player.alive) { this.state = 'idle'; return; }
+     const distance = this.mesh.position.distanceTo(player.position);
+     this.attackTimer -= dt;
+     if (distance < 2.1) {
+@@ -456,11 +555,14 @@ export class Infected {
+   hit(damage, hitPoint, isHeadshot = false) {
+     if (!this.alive) return false;
+     this.health -= damage * (isHeadshot ? 2.25 : 1);
++    this.mesh.position.addScaledVector(new THREE.Vector3().subVectors(this.mesh.position, hitPoint).setY(0).normalize(), 0.16);
+     if (this.health <= 0) {
+       this.alive = false;
+       this.mesh.rotation.z = Math.PI * 0.48;
+       this.mesh.position.y = this.world.terrainHeight(this.mesh.position.x, this.mesh.position.z) + 0.35;
+       for (const obj of this.hitTargets) obj.userData.enemy = null;
++      this.deadTimer = 0;
+       return true;
+     }
+     return false;
