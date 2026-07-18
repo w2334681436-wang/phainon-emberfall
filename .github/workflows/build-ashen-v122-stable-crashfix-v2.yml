@@ -1,0 +1,227 @@
+name: Build Ashen Frontier v1.2.2 Stable Crashfix V2
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tools/ashen-v122/**'
+      - '.github/workflows/build-ashen-v122-stable-crashfix-v2.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build-test-export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download complete v1.2.1 Android project
+        uses: actions/download-artifact@v4
+        with:
+          name: ashen-frontier-v121-vivo-verified
+          run-id: 29627461183
+          github-token: ${{ github.token }}
+          path: input
+
+      - name: Prepare v1.2.2 stable project
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROJECT_ZIP="$(find input -type f -name '*Android工程源码.zip' -print -quit)"
+          test -n "$PROJECT_ZIP"
+          mkdir -p extracted work output
+          unzip -q "$PROJECT_ZIP" -d extracted
+          SETTINGS="$(find extracted -type f -name settings.gradle -print -quit)"
+          test -n "$SETTINGS"
+          SOURCE_ROOT="$(dirname "$SETTINGS")"
+          cp -a "$SOURCE_ROOT"/. work/
+          rm -rf work/.gradle work/app/build work/build work/app/src/main/java
+
+          JS="$(find work/app/src/main/assets/game/assets -type f -name 'index-*.js' -print -quit)"
+          test -s "$JS"
+          python3 tools/ashen-v122/patch_web.py "$JS"
+
+          cp tools/ashen-v122/app-build.gradle work/app/build.gradle
+          cp tools/ashen-v122/AndroidManifest.xml work/app/src/main/AndroidManifest.xml
+          mkdir -p work/app/src/main/java/com/wxy/ashenfrontier/stable
+          cp tools/ashen-v122/MainActivity.java work/app/src/main/java/com/wxy/ashenfrontier/stable/MainActivity.java
+          cat > work/app/src/main/res/values/strings.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources><string name="app_name">灰烬边境 稳定修复版</string></resources>
+          EOF
+          echo '1.2.2-stable-safe-v2' > work/app/src/main/assets/game/android-build-version.txt
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK components
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Compile, align and sign release APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd work && gradle --no-daemon --stacktrace :app:assembleRelease)
+          BT="$ANDROID_HOME/build-tools/35.0.0"
+          UNSIGNED='work/app/build/outputs/apk/release/app-release-unsigned.apk'
+          test -s "$UNSIGNED"
+          keytool -genkeypair -noprompt \
+            -keystore output/ashen-stable.jks \
+            -storepass ashen122 \
+            -keypass ashen122 \
+            -alias ashenstable \
+            -keyalg RSA \
+            -keysize 3072 \
+            -validity 10000 \
+            -dname 'CN=Ashen Frontier Stable, OU=Android, O=WXY, C=CN'
+          "$BT/zipalign" -f -p 4 "$UNSIGNED" output/aligned.apk
+          "$BT/apksigner" sign \
+            --ks output/ashen-stable.jks \
+            --ks-pass pass:ashen122 \
+            --key-pass pass:ashen122 \
+            --ks-key-alias ashenstable \
+            --v1-signing-enabled true \
+            --v2-signing-enabled true \
+            --v3-signing-enabled true \
+            --out output/灰烬边境-v1.2.2-稳定修复版.apk \
+            output/aligned.apk
+          rm output/aligned.apk
+
+      - name: Static package verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          BT="$ANDROID_HOME/build-tools/35.0.0"
+          APK='output/灰烬边境-v1.2.2-稳定修复版.apk'
+          "$BT/apksigner" verify --verbose --print-certs "$APK" | tee output/signature-report.txt
+          "$BT/aapt" dump badging "$APK" | tee output/badging.txt
+          grep -q "package: name='com.wxy.ashenfrontier.stable'" output/badging.txt
+          grep -q "versionName='1.2.2'" output/badging.txt
+          grep -q 'Verified using v1 scheme (JAR signing): true' output/signature-report.txt
+          grep -q 'Verified using v2 scheme (APK Signature Scheme v2): true' output/signature-report.txt
+          grep -q 'Verified using v3 scheme (APK Signature Scheme v3): true' output/signature-report.txt
+          unzip -t "$APK" | tee output/zip-test.txt
+          unzip -p "$APK" assets/game/android-build-version.txt | grep -q '1.2.2-stable-safe-v2'
+          JS_ENTRY="$(unzip -Z1 "$APK" | grep '^assets/game/assets/index-.*\.js$' | head -1)"
+          test -n "$JS_ENTRY"
+          JS_BYTES="$(unzip -p "$APK" "$JS_ENTRY" | wc -c)"
+          test "$JS_BYTES" -gt 500000
+          sha256sum "$APK" > output/SHA256.txt
+          (cd work && zip -qr ../output/灰烬边境-v1.2.2-Android工程源码.zip . \
+            -x '.gradle/*' 'app/build/*' 'build/*')
+
+      - name: Android emulator install and real launch test
+        id: emulator_test
+        continue-on-error: true
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          disable-animations: true
+          script: |
+            set +e
+            APK='output/灰烬边境-v1.2.2-稳定修复版.apk'
+            PKG='com.wxy.ashenfrontier.stable'
+            TEST_FAILED=0
+
+            adb logcat -c
+            adb install -r "$APK" > output/adb-install.txt 2>&1
+            if [ $? -ne 0 ]; then TEST_FAILED=1; fi
+
+            adb shell am force-stop "$PKG" || true
+            adb shell am start -W -n "$PKG/.MainActivity" > output/am-start.txt 2>&1
+            if [ $? -ne 0 ]; then TEST_FAILED=1; fi
+
+            sleep 60
+            adb logcat -d -v threadtime > output/emulator-logcat.txt 2>&1
+            adb shell pidof "$PKG" > output/pid.txt 2>&1
+            adb shell dumpsys activity activities > output/activity-dumpsys.txt 2>&1
+            adb exec-out screencap -p > output/emulator-screenshot.png 2>/dev/null
+
+            if ! grep -q 'ASHEN_READY_NATIVE' output/emulator-logcat.txt; then
+              echo 'Native ready handshake not found' | tee -a output/emulator-test-result.txt
+              TEST_FAILED=1
+            fi
+            if grep -q "Process: $PKG" output/emulator-logcat.txt; then
+              echo 'Fatal app process record found' | tee -a output/emulator-test-result.txt
+              TEST_FAILED=1
+            fi
+            if grep -q 'WEBVIEW_RENDERER_GONE' output/emulator-logcat.txt; then
+              echo 'WebView renderer crash/restart found' | tee -a output/emulator-test-result.txt
+              TEST_FAILED=1
+            fi
+            if grep -q 'BOOT_TIMEOUT\|WEB_BOOT_ERROR\|Native startup failure' output/emulator-logcat.txt; then
+              echo 'Boot error or timeout found' | tee -a output/emulator-test-result.txt
+              TEST_FAILED=1
+            fi
+            if [ ! -s output/pid.txt ]; then
+              echo 'Application process is not alive' | tee -a output/emulator-test-result.txt
+              TEST_FAILED=1
+            fi
+            if ! grep -q "$PKG/.MainActivity" output/activity-dumpsys.txt; then
+              echo 'MainActivity is not present in activity state' | tee -a output/emulator-test-result.txt
+              TEST_FAILED=1
+            fi
+
+            if [ "$TEST_FAILED" -eq 0 ]; then
+              echo 'PASS: installed, launched, game reported ready, process remained alive, and no crash signature was found.' | tee output/emulator-test-result.txt
+            else
+              echo 'FAIL: see exported logcat, activity dump and screenshot.' | tee -a output/emulator-test-result.txt
+            fi
+            exit "$TEST_FAILED"
+
+      - name: Write verification report
+        if: always()
+        shell: bash
+        run: |
+          TEST_OUTCOME='${{ steps.emulator_test.outcome }}'
+          cat > output/验证说明.txt <<EOF
+          灰烬边境 v1.2.2 稳定修复版
+
+          构建方式：从完整 Android 工程重新编译，不是修改旧 APK。
+          包名：com.wxy.ashenfrontier.stable
+          版本：1.2.2
+          模拟器启动测试结果：${TEST_OUTCOME}
+
+          稳定性处理：
+          1. 不再使用 file:// 加载 ES 模块，改为受控 HTTPS 本地资源映射。
+          2. 移除强制 WebView 硬件图层。
+          3. 首次启动采用低像素比、无抗锯齿、无阴影和低场景密度。
+          4. 禁用启动阶段最重的美术导演模块。
+          5. 加入网页到原生层的 ASHEN_READY 主动握手。
+          6. WebView 图形进程崩溃时由原生层接管并显示错误，不再直接闪退。
+          7. APK 包名、版本、完整资源、ZIP 结构和 v1/v2/v3 签名均经过自动验证。
+          EOF
+
+      - name: Export APK, source, screenshot and crash diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ashen-frontier-v122-stable-v2-diagnostics
+          path: output/*
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Enforce emulator test result
+        if: steps.emulator_test.outcome != 'success'
+        run: exit 1

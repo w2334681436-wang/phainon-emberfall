@@ -1,0 +1,489 @@
+name: Build Ashen Frontier v1.2.2 Stable Crashfix
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/build-ashen-v122-stable-crashfix.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download verified v1.2.1 project artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ashen-frontier-v121-vivo-verified
+          run-id: 29627461183
+          github-token: ${{ github.token }}
+          path: input
+
+      - name: Extract Android project
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROJECT_ZIP="$(find input -type f -name '*Android工程源码.zip' -print -quit)"
+          test -n "$PROJECT_ZIP"
+          mkdir -p extracted work
+          unzip -q "$PROJECT_ZIP" -d extracted
+          SETTINGS="$(find extracted -type f -name settings.gradle -print -quit)"
+          test -n "$SETTINGS"
+          SOURCE_ROOT="$(dirname "$SETTINGS")"
+          cp -a "$SOURCE_ROOT"/. work/
+          rm -rf work/.gradle work/app/build work/build
+
+      - name: Patch web boot profile and native wrapper
+        shell: bash
+        run: |
+          set -euo pipefail
+          JS="$(find work/app/src/main/assets/game/assets -type f -name 'index-*.js' -print -quit)"
+          test -s "$JS"
+          python3 - "$JS" <<'PY'
+          from pathlib import Path
+          import sys
+
+          path = Path(sys.argv[1])
+          text = path.read_text(encoding='utf-8')
+
+          replacements = {
+            'Rt=new m0({antialias:!yt,powerPreference:"high-performance",preserveDrawingBuffer:!1}),Rt.setPixelRatio(Math.min(devicePixelRatio,yt?1:1.55)),Rt.setSize(innerWidth,innerHeight),Rt.shadowMap.enabled=!yt,':
+            'Rt=new m0({antialias:!1,powerPreference:"default",preserveDrawingBuffer:!1,alpha:!1,stencil:!1,failIfMajorPerformanceCaveat:!1}),Rt.setPixelRatio(Math.min(devicePixelRatio,.72)),Rt.setSize(innerWidth,innerHeight),Rt.shadowMap.enabled=!1,',
+            'Cc=new L0(mt,ve,We,{mobile:yt})': 'Cc=null',
+            'const i=yt?500:1100,e=new Float32Array(i*3)': 'const i=140,e=new Float32Array(i*3)',
+            'const e=this.mobile?96:150,t=new xi': 'const e=56,t=new xi',
+            'for(let n=0;n<(this.mobile?10:18);n++)': 'for(let n=0;n<5;n++)',
+            'const e=this.mobile?210:360;': 'const e=90;',
+            'const t=this.mobile?85:150;': 'const t=36;',
+            'for(let n=0;n<(this.mobile?45:80);n++)': 'for(let n=0;n<20;n++)',
+            'const t=this.mobile?230:430,n=this.mobile?190:360': 'const t=160,n=135',
+            'e(-260,150,this.mobile?12:20,"civilian"),e(220,-250,this.mobile?7:12,"police"),e(440,360,this.mobile?12:20,"military"),e(-440,-360,this.mobile?6:10,"civilian");for(let t=0;t<(this.mobile?6:14);t++)':
+            'e(-260,150,5,"civilian"),e(220,-250,3,"police"),e(440,360,5,"military"),e(-440,-360,3,"civilian");for(let t=0;t<2;t++)',
+            'ae.showStart(i),ae.updateInventory(be,Rn)': 'ae.showStart(i),window.__ASHEN_READY__=!0,console.log("ASHEN_READY"),ae.updateInventory(be,Rn)'
+          }
+
+          for old, new in replacements.items():
+            if old not in text:
+              raise SystemExit(f'Missing expected JS pattern: {old[:100]}')
+            text = text.replace(old, new, 1)
+
+          path.write_text(text, encoding='utf-8')
+          print('Patched JS bytes:', path.stat().st_size)
+          PY
+
+          cat > work/app/build.gradle <<'EOF'
+          plugins { id 'com.android.application' }
+          android {
+            namespace 'com.wxy.ashenfrontier.stable'
+            compileSdk 35
+            defaultConfig {
+              applicationId 'com.wxy.ashenfrontier.stable'
+              minSdk 23
+              targetSdk 35
+              versionCode 122
+              versionName '1.2.2'
+            }
+            buildTypes {
+              release { debuggable false; minifyEnabled false; shrinkResources false }
+            }
+            compileOptions {
+              sourceCompatibility JavaVersion.VERSION_17
+              targetCompatibility JavaVersion.VERSION_17
+            }
+            androidResources { noCompress += ['js', 'css', 'html'] }
+          }
+          EOF
+
+          rm -rf work/app/src/main/java
+          mkdir -p work/app/src/main/java/com/wxy/ashenfrontier/stable
+          cat > work/app/src/main/java/com/wxy/ashenfrontier/stable/MainActivity.java <<'EOF'
+          package com.wxy.ashenfrontier.stable;
+
+          import android.annotation.TargetApi;
+          import android.app.Activity;
+          import android.graphics.Color;
+          import android.net.Uri;
+          import android.os.Build;
+          import android.os.Bundle;
+          import android.util.Log;
+          import android.view.Gravity;
+          import android.view.View;
+          import android.view.ViewGroup;
+          import android.view.Window;
+          import android.view.WindowManager;
+          import android.webkit.ConsoleMessage;
+          import android.webkit.RenderProcessGoneDetail;
+          import android.webkit.WebChromeClient;
+          import android.webkit.WebResourceRequest;
+          import android.webkit.WebResourceResponse;
+          import android.webkit.WebSettings;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+          import android.widget.FrameLayout;
+          import android.widget.TextView;
+
+          import java.io.ByteArrayInputStream;
+          import java.io.IOException;
+          import java.io.InputStream;
+          import java.nio.charset.StandardCharsets;
+          import java.util.Locale;
+
+          public final class MainActivity extends Activity {
+            private static final String TAG = "AshenFrontier";
+            private static final String ORIGIN = "https://appassets.local/";
+            private FrameLayout root;
+            private WebView webView;
+            private TextView statusView;
+            private int rendererRecoveryCount = 0;
+            private boolean destroyed = false;
+
+            @Override protected void onCreate(Bundle state) {
+              super.onCreate(state);
+              try {
+                requestWindowFeature(Window.FEATURE_NO_TITLE);
+                getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
+                getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON | WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED);
+                hideSystemBars();
+                createRoot();
+                createWebView(state);
+              } catch (Throwable error) {
+                Log.e(TAG, "Native startup failure", error);
+                showNativeError("应用启动失败\n" + error.getClass().getSimpleName());
+              }
+            }
+
+            private void createRoot() {
+              root = new FrameLayout(this);
+              root.setBackgroundColor(Color.rgb(7, 10, 9));
+              setContentView(root);
+              statusView = new TextView(this);
+              statusView.setText("正在启动灰烬边境…");
+              statusView.setTextColor(Color.rgb(226, 217, 194));
+              statusView.setTextSize(16f);
+              statusView.setGravity(Gravity.CENTER);
+              statusView.setPadding(32, 32, 32, 32);
+              root.addView(statusView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+            }
+
+            private void createWebView(Bundle savedState) {
+              if (destroyed || root == null) return;
+              destroyWebViewOnly();
+              webView = new WebView(this);
+              webView.setBackgroundColor(Color.rgb(7, 10, 9));
+              webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
+              webView.setHorizontalScrollBarEnabled(false);
+              webView.setVerticalScrollBarEnabled(false);
+
+              WebSettings settings = webView.getSettings();
+              settings.setJavaScriptEnabled(true);
+              settings.setDomStorageEnabled(true);
+              settings.setDatabaseEnabled(false);
+              settings.setAllowFileAccess(false);
+              settings.setAllowContentAccess(false);
+              settings.setMediaPlaybackRequiresUserGesture(false);
+              settings.setCacheMode(WebSettings.LOAD_NO_CACHE);
+              settings.setBuiltInZoomControls(false);
+              settings.setDisplayZoomControls(false);
+              settings.setSupportZoom(false);
+              settings.setUseWideViewPort(true);
+              settings.setLoadWithOverviewMode(false);
+              settings.setTextZoom(100);
+              settings.setUserAgentString(settings.getUserAgentString() + " AshenFrontierAndroid/1.2.2");
+
+              WebView.setWebContentsDebuggingEnabled(false);
+              webView.setWebChromeClient(new WebChromeClient() {
+                @Override public boolean onConsoleMessage(ConsoleMessage message) {
+                  Log.d(TAG, "JS " + message.messageLevel() + ": " + message.message() + " @" + message.lineNumber());
+                  return true;
+                }
+              });
+              webView.setWebViewClient(Build.VERSION.SDK_INT >= 26 ? new Api26AssetClient() : new AssetClient());
+              root.addView(webView, 0, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+              if (savedState != null && webView.restoreState(savedState) != null) return;
+              webView.post(() -> {
+                if (!destroyed && webView != null) webView.loadUrl(ORIGIN + "index.html?safe=1");
+              });
+            }
+
+            private class AssetClient extends WebViewClient {
+              @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                return serveLocalAsset(request.getUrl());
+              }
+              @SuppressWarnings("deprecation")
+              @Override public WebResourceResponse shouldInterceptRequest(WebView view, String url) {
+                return serveLocalAsset(Uri.parse(url));
+              }
+              @Override public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+                if (statusView != null) statusView.setVisibility(View.GONE);
+                view.evaluateJavascript("setTimeout(()=>console.log('ANDROID_BOOT_CHECK',Boolean(window.__ASHEN_READY__),window.__ASHEN_BOOT_ERROR__||''),1200)", null);
+              }
+            }
+
+            @TargetApi(26)
+            private final class Api26AssetClient extends AssetClient {
+              @Override public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+                Log.e(TAG, "WebView renderer exited. crashed=" + detail.didCrash() + " priority=" + detail.rendererPriorityAtExit());
+                if (root != null && view != null) root.removeView(view);
+                try { view.destroy(); } catch (Throwable ignored) { }
+                if (view == webView) webView = null;
+                if (!destroyed && rendererRecoveryCount < 1) {
+                  rendererRecoveryCount++;
+                  if (statusView != null) {
+                    statusView.setText("图形进程已自动恢复，正在以最低画质重启…");
+                    statusView.setVisibility(View.VISIBLE);
+                  }
+                  root.postDelayed(() -> createWebView(null), 800);
+                } else {
+                  showNativeError("图形进程发生异常，应用已阻止闪退。\n请关闭后台大型应用后重新启动。");
+                }
+                return true;
+              }
+            }
+
+            private WebResourceResponse serveLocalAsset(Uri uri) {
+              if (uri == null || !"appassets.local".equalsIgnoreCase(uri.getHost())) return null;
+              String path = uri.getPath();
+              if (path == null || path.isEmpty() || "/".equals(path)) path = "/index.html";
+              while (path.startsWith("/")) path = path.substring(1);
+              if (path.contains("..")) return notFound();
+              try {
+                InputStream stream = getAssets().open("game/" + path);
+                return new WebResourceResponse(mimeFor(path), "UTF-8", stream);
+              } catch (IOException error) {
+                Log.e(TAG, "Missing asset game/" + path, error);
+                return notFound();
+              }
+            }
+
+            private WebResourceResponse notFound() {
+              return new WebResourceResponse("text/plain", "UTF-8", 404, "Not Found", null,
+                new ByteArrayInputStream("Not Found".getBytes(StandardCharsets.UTF_8)));
+            }
+
+            private static String mimeFor(String path) {
+              String lower = path.toLowerCase(Locale.US);
+              if (lower.endsWith(".html")) return "text/html";
+              if (lower.endsWith(".js") || lower.endsWith(".mjs")) return "text/javascript";
+              if (lower.endsWith(".css")) return "text/css";
+              if (lower.endsWith(".json")) return "application/json";
+              if (lower.endsWith(".png")) return "image/png";
+              if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+              if (lower.endsWith(".webp")) return "image/webp";
+              if (lower.endsWith(".svg")) return "image/svg+xml";
+              if (lower.endsWith(".mp3")) return "audio/mpeg";
+              if (lower.endsWith(".ogg")) return "audio/ogg";
+              if (lower.endsWith(".wasm")) return "application/wasm";
+              return "application/octet-stream";
+            }
+
+            private void showNativeError(String message) {
+              if (root == null) {
+                root = new FrameLayout(this);
+                root.setBackgroundColor(Color.rgb(7, 10, 9));
+                setContentView(root);
+              }
+              destroyWebViewOnly();
+              if (statusView == null) {
+                statusView = new TextView(this);
+                statusView.setTextColor(Color.rgb(238, 226, 201));
+                statusView.setTextSize(16f);
+                statusView.setGravity(Gravity.CENTER);
+                statusView.setPadding(40, 40, 40, 40);
+                root.addView(statusView, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+              }
+              statusView.setText(message);
+              statusView.setVisibility(View.VISIBLE);
+            }
+
+            private void destroyWebViewOnly() {
+              if (webView == null) return;
+              try {
+                if (root != null) root.removeView(webView);
+                webView.stopLoading();
+                webView.loadUrl("about:blank");
+                webView.removeAllViews();
+                webView.destroy();
+              } catch (Throwable error) {
+                Log.w(TAG, "WebView cleanup failed", error);
+              }
+              webView = null;
+            }
+
+            private void hideSystemBars() {
+              getWindow().getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY |
+                View.SYSTEM_UI_FLAG_FULLSCREEN |
+                View.SYSTEM_UI_FLAG_HIDE_NAVIGATION |
+                View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN |
+                View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION |
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+              );
+            }
+
+            @Override public void onWindowFocusChanged(boolean hasFocus) { super.onWindowFocusChanged(hasFocus); if (hasFocus) hideSystemBars(); }
+            @Override public void onBackPressed() {
+              if (webView == null) { moveTaskToBack(true); return; }
+              webView.evaluateJavascript("Boolean(window.__ashenHandleBack&&window.__ashenHandleBack())", value -> {
+                if (!"true".equals(value)) {
+                  if (webView != null && webView.canGoBack()) webView.goBack();
+                  else moveTaskToBack(true);
+                }
+              });
+            }
+            @Override protected void onSaveInstanceState(Bundle outState) { if (webView != null) webView.saveState(outState); super.onSaveInstanceState(outState); }
+            @Override protected void onPause() { if (webView != null) webView.onPause(); super.onPause(); }
+            @Override protected void onResume() { super.onResume(); if (webView != null) webView.onResume(); hideSystemBars(); }
+            @Override protected void onDestroy() { destroyed = true; destroyWebViewOnly(); super.onDestroy(); }
+          }
+          EOF
+
+          cat > work/app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+            <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+            <uses-feature android:glEsVersion="0x00020000" android:required="true" />
+            <application
+              android:allowBackup="true"
+              android:hardwareAccelerated="true"
+              android:largeHeap="true"
+              android:icon="@drawable/ic_launcher"
+              android:label="@string/app_name"
+              android:supportsRtl="true"
+              android:theme="@style/AppTheme"
+              android:usesCleartextTraffic="false">
+              <activity
+                android:name=".MainActivity"
+                android:configChanges="orientation|screenSize|keyboardHidden|uiMode|screenLayout|smallestScreenSize"
+                android:enableOnBackInvokedCallback="false"
+                android:exported="true"
+                android:resizeableActivity="true"
+                android:screenOrientation="sensorLandscape">
+                <intent-filter>
+                  <action android:name="android.intent.action.MAIN" />
+                  <category android:name="android.intent.category.LAUNCHER" />
+                </intent-filter>
+              </activity>
+            </application>
+          </manifest>
+          EOF
+
+          cat > work/app/src/main/res/values/strings.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <resources><string name="app_name">灰烬边境 稳定修复版</string></resources>
+          EOF
+          echo '1.2.2-stable-safe' > work/app/src/main/assets/game/android-build-version.txt
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Compile release APK
+        working-directory: work
+        run: gradle --no-daemon --stacktrace :app:assembleRelease
+
+      - name: Align, sign and statically verify
+        shell: bash
+        run: |
+          set -euo pipefail
+          BT="$ANDROID_HOME/build-tools/35.0.0"
+          UNSIGNED='work/app/build/outputs/apk/release/app-release-unsigned.apk'
+          mkdir -p output
+          keytool -genkeypair -noprompt -keystore output/ashen-stable.jks -storepass ashen122 -keypass ashen122 -alias ashenstable -keyalg RSA -keysize 3072 -validity 10000 -dname 'CN=Ashen Frontier Stable, OU=Android, O=WXY, C=CN'
+          "$BT/zipalign" -f -p 4 "$UNSIGNED" output/aligned.apk
+          "$BT/apksigner" sign --ks output/ashen-stable.jks --ks-pass pass:ashen122 --key-pass pass:ashen122 --ks-key-alias ashenstable --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true --out output/灰烬边境-v1.2.2-稳定修复版.apk output/aligned.apk
+          "$BT/apksigner" verify --verbose --print-certs output/灰烬边境-v1.2.2-稳定修复版.apk | tee output/signature-report.txt
+          "$BT/aapt" dump badging output/灰烬边境-v1.2.2-稳定修复版.apk | tee output/badging.txt
+          grep -q "package: name='com.wxy.ashenfrontier.stable'" output/badging.txt
+          grep -q "versionName='1.2.2'" output/badging.txt
+          grep -q 'Verified using v1 scheme (JAR signing): true' output/signature-report.txt
+          grep -q 'Verified using v2 scheme (APK Signature Scheme v2): true' output/signature-report.txt
+          grep -q 'Verified using v3 scheme (APK Signature Scheme v3): true' output/signature-report.txt
+          unzip -t output/灰烬边境-v1.2.2-稳定修复版.apk
+          unzip -p output/灰烬边境-v1.2.2-稳定修复版.apk assets/game/android-build-version.txt | grep -q '1.2.2-stable-safe'
+          JS_ENTRY="$(unzip -Z1 output/灰烬边境-v1.2.2-稳定修复版.apk | grep '^assets/game/assets/index-.*\.js$' | head -1)"
+          test -n "$JS_ENTRY"
+          JS_BYTES="$(unzip -p output/灰烬边境-v1.2.2-稳定修复版.apk "$JS_ENTRY" | wc -c)"
+          test "$JS_BYTES" -gt 500000
+          sha256sum output/灰烬边境-v1.2.2-稳定修复版.apk > output/SHA256.txt
+          rm -f output/aligned.apk
+          (cd work && zip -qr ../output/灰烬边境-v1.2.2-Android工程源码.zip . -x '.gradle/*' 'app/build/*' 'build/*')
+
+      - name: Emulator launch and crash test
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          disable-animations: true
+          script: |
+            set -euo pipefail
+            APK='output/灰烬边境-v1.2.2-稳定修复版.apk'
+            PKG='com.wxy.ashenfrontier.stable'
+            adb logcat -c
+            adb install -r "$APK"
+            adb shell am force-stop "$PKG"
+            adb shell am start -W -n "$PKG/.MainActivity" | tee output/am-start.txt
+            sleep 25
+            adb shell pidof "$PKG" | tee output/pid.txt
+            test -s output/pid.txt
+            adb shell dumpsys activity activities | grep -F "$PKG/.MainActivity" | tee output/activity-state.txt
+            adb logcat -d -v threadtime > output/emulator-logcat.txt
+            if grep -A20 -B5 -E "FATAL EXCEPTION|Process: ${PKG}|WebView renderer exited" output/emulator-logcat.txt | grep -q "$PKG\|FATAL EXCEPTION\|WebView renderer exited"; then
+              echo 'Detected fatal or renderer crash in emulator log' >&2
+              grep -A30 -B10 -E "FATAL EXCEPTION|Process: ${PKG}|WebView renderer exited" output/emulator-logcat.txt >&2 || true
+              exit 1
+            fi
+            grep -q 'ASHEN_READY' output/emulator-logcat.txt
+            adb exec-out screencap -p > output/emulator-screenshot.png
+
+      - name: Write validation report
+        shell: bash
+        run: |
+          cat > output/验证说明.txt <<'EOF'
+          灰烬边境 v1.2.2 稳定修复版
+          
+          本版本不是在旧 APK 上改签名，而是重新编译。
+          已完成：
+          1. 使用独立包名 com.wxy.ashenfrontier.stable。
+          2. 改为安全 HTTPS 本地资源映射，不再使用 file:// 模块加载。
+          3. 移除强制 WebView 硬件图层。
+          4. 默认降低首屏像素比、关闭阴影与重型美术导演模块。
+          5. 减少启动阶段地形细分、自然物和感染者数量。
+          6. WebView 图形进程异常时由原生层拦截，不再直接带崩应用。
+          7. APK v1/v2/v3 签名、zipalign、包名和完整资源检查通过。
+          8. Android API 30 模拟器已完成安装、启动、保持进程、ASHEN_READY 与无致命崩溃检查。
+          EOF
+
+      - name: Upload verified release
+        uses: actions/upload-artifact@v4
+        with:
+          name: ashen-frontier-v122-stable-emulator-verified
+          path: output/*
+          if-no-files-found: error
+          retention-days: 7
