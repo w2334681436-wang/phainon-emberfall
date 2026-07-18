@@ -4,6 +4,8 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - 'tools/ashen-apk/**'
+      - 'tools/ashen-apk-v110/**'
       - 'tools/ashen-apk-v120/**'
       - '.github/workflows/build-ashen-frontier-v121-compat.yml'
   workflow_dispatch:
@@ -20,30 +22,62 @@ jobs:
       - name: Checkout source
         uses: actions/checkout@v4
 
-      - name: Reconstruct complete v1.2 source
+      - name: Reconstruct v1.2 through verified upgrade chain
         shell: bash
         run: |
           set -euo pipefail
           ROOT='tools/ashen-apk-v121-compat/work'
-          RAW="$ROOT/raw"
           WEB="$ROOT/web"
           rm -rf "$ROOT"
-          mkdir -p "$RAW" "$WEB"
+          mkdir -p "$WEB"
 
-          base64 --decode tools/ashen-apk-v120/source.part00 > /tmp/ashen-v120-source.tar.xz
-          xz --test /tmp/ashen-v120-source.tar.xz
-          tar -xJf /tmp/ashen-v120-source.tar.xz -C "$RAW"
+          cat \
+            tools/ashen-apk/source.part00 \
+            tools/ashen-apk/source.part01 \
+            tools/ashen-apk/source.part02 \
+            tools/ashen-apk/source.part03 \
+            tools/ashen-apk/source.part04 \
+            tools/ashen-apk/source.part05a \
+            tools/ashen-apk/source.part05b \
+            tools/ashen-apk/source.part05c \
+            | base64 --decode > /tmp/ashen-v100.tar.xz
+          echo '78305419d883c75c77a2e3ff7eb54493405b2de44bba8735ea8fa4de7470b225  /tmp/ashen-v100.tar.xz' | sha256sum --check
+          xz --test /tmp/ashen-v100.tar.xz
+          tar -xJf /tmp/ashen-v100.tar.xz -C "$WEB"
 
-          PACKAGE_JSON="$(find "$RAW" -maxdepth 4 -type f -name package.json -print -quit)"
-          test -n "$PACKAGE_JSON"
-          SOURCE_ROOT="$(dirname "$PACKAGE_JSON")"
-          cp -a "$SOURCE_ROOT"/. "$WEB"/
+          cat tools/ashen-apk-v110/patch.safe15.0{0,1,2,3,4} > /tmp/ashen-v110.patch
+          cat tools/ashen-apk-v120/update.part{00,01,02} | base64 --decode | gzip -dc > /tmp/ashen-v120.patch
+
+          apply_patch_safely() {
+            local patch_file="$1"
+            local label="$2"
+            echo "Applying $label"
+            if (cd "$WEB" && git apply --check --recount --whitespace=nowarn "$patch_file"); then
+              (cd "$WEB" && git apply --recount --whitespace=nowarn "$patch_file")
+              return 0
+            fi
+            if (cd "$WEB" && patch --dry-run --batch --forward --fuzz=3 -p1 < "$patch_file"); then
+              (cd "$WEB" && patch --batch --forward --fuzz=3 -p1 < "$patch_file")
+              return 0
+            fi
+            if (cd "$WEB" && patch --dry-run --batch --forward --fuzz=3 -p0 < "$patch_file"); then
+              (cd "$WEB" && patch --batch --forward --fuzz=3 -p0 < "$patch_file")
+              return 0
+            fi
+            echo "Unable to apply $label"
+            sed -n '1,120p' "$patch_file"
+            return 1
+          }
+
+          apply_patch_safely /tmp/ashen-v110.patch v1.1
+          apply_patch_safely /tmp/ashen-v120.patch v1.2
 
           test -s "$WEB/package.json"
           test -s "$WEB/src/main.js"
           test -s "$WEB/src/art.js"
           test -s "$WEB/src/effects.js"
-          node -e "const p=require('./$WEB/package.json'); if(p.version!=='1.2.0') throw new Error('Unexpected source version: '+p.version)"
+          node -e "const p=require('./$WEB/package.json'); if(p.version!=='1.2.0') throw new Error('Unexpected version: '+p.version)"
+          grep -q "GAME_VERSION = '1.2.0'" "$WEB/src/data.js"
           printf '1.2.1-android-compat\n' > "$WEB/ANDROID_BUILD_VERSION.txt"
 
       - name: Set up Node.js
@@ -94,9 +128,7 @@ jobs:
           cp -a tools/ashen-apk-v121-compat/work/web/dist/. "$MAIN/assets/game/"
 
           cat > "$ROOT/settings.gradle" <<'EOF'
-          pluginManagement {
-              repositories { google(); mavenCentral(); gradlePluginPortal() }
-          }
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
           dependencyResolutionManagement {
               repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
               repositories { google(); mavenCentral() }
@@ -106,9 +138,7 @@ jobs:
           EOF
 
           cat > "$ROOT/build.gradle" <<'EOF'
-          plugins {
-              id 'com.android.application' version '8.7.3' apply false
-          }
+          plugins { id 'com.android.application' version '8.7.3' apply false }
           EOF
 
           cat > "$ROOT/gradle.properties" <<'EOF'
@@ -120,11 +150,9 @@ jobs:
 
           cat > "$ROOT/app/build.gradle" <<'EOF'
           plugins { id 'com.android.application' }
-
           android {
               namespace 'com.wxy.ashenfrontier.compat'
               compileSdk 35
-
               defaultConfig {
                   applicationId 'com.wxy.ashenfrontier.compat'
                   minSdk 23
@@ -132,15 +160,9 @@ jobs:
                   versionCode 121
                   versionName '1.2.1'
               }
-
               buildTypes {
-                  release {
-                      debuggable false
-                      minifyEnabled false
-                      shrinkResources false
-                  }
+                  release { debuggable false; minifyEnabled false; shrinkResources false }
               }
-
               compileOptions {
                   sourceCompatibility JavaVersion.VERSION_17
                   targetCompatibility JavaVersion.VERSION_17
@@ -178,9 +200,7 @@ jobs:
 
           cat > "$MAIN/res/values/strings.xml" <<'EOF'
           <?xml version="1.0" encoding="utf-8"?>
-          <resources>
-              <string name="app_name">灰烬边境 修复版</string>
-          </resources>
+          <resources><string name="app_name">灰烬边境 修复版</string></resources>
           EOF
 
           cat > "$MAIN/res/values/styles.xml" <<'EOF'
@@ -188,11 +208,9 @@ jobs:
           <resources>
               <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
                   <item name="android:fontFamily">sans</item>
-                  <item name="android:windowActionModeOverlay">true</item>
                   <item name="android:windowBackground">#070A09</item>
                   <item name="android:windowFullscreen">true</item>
                   <item name="android:windowNoTitle">true</item>
-                  <item name="android:windowDisablePreview">false</item>
                   <item name="android:colorAccent">#D7B26D</item>
                   <item name="android:navigationBarColor">#000000</item>
                   <item name="android:statusBarColor">#000000</item>
@@ -214,7 +232,6 @@ jobs:
 
           cat > "$JAVA/MainActivity.java" <<'EOF'
           package com.wxy.ashenfrontier.compat;
-
           import android.app.Activity;
           import android.graphics.Color;
           import android.os.Build;
@@ -224,7 +241,6 @@ jobs:
           import android.view.WindowInsets;
           import android.view.WindowInsetsController;
           import android.view.WindowManager;
-          import android.webkit.RenderProcessGoneDetail;
           import android.webkit.WebChromeClient;
           import android.webkit.WebSettings;
           import android.webkit.WebView;
@@ -232,26 +248,17 @@ jobs:
 
           public class MainActivity extends Activity {
               private WebView webView;
-
-              @Override
-              protected void onCreate(Bundle state) {
+              @Override protected void onCreate(Bundle state) {
                   super.onCreate(state);
                   requestWindowFeature(Window.FEATURE_NO_TITLE);
                   getWindow().setFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN, WindowManager.LayoutParams.FLAG_FULLSCREEN);
                   getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON | WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED);
-                  hideSystemBars();
-                  createWebView(state);
-              }
-
-              private void createWebView(Bundle state) {
+                  hideBars();
                   webView = new WebView(this);
-                  webView.setBackgroundColor(Color.rgb(7, 10, 9));
+                  webView.setBackgroundColor(Color.rgb(7,10,9));
                   webView.setLayerType(View.LAYER_TYPE_HARDWARE, null);
                   webView.setOverScrollMode(View.OVER_SCROLL_NEVER);
-                  webView.setHorizontalScrollBarEnabled(false);
-                  webView.setVerticalScrollBarEnabled(false);
                   setContentView(webView);
-
                   WebSettings s = webView.getSettings();
                   s.setJavaScriptEnabled(true);
                   s.setDomStorageEnabled(true);
@@ -262,108 +269,41 @@ jobs:
                   s.setAllowUniversalAccessFromFileURLs(true);
                   s.setMediaPlaybackRequiresUserGesture(false);
                   s.setCacheMode(WebSettings.LOAD_DEFAULT);
-                  s.setBuiltInZoomControls(false);
-                  s.setDisplayZoomControls(false);
                   s.setSupportZoom(false);
                   s.setUseWideViewPort(true);
                   s.setLoadWithOverviewMode(false);
                   s.setTextZoom(100);
-                  s.setUserAgentString(s.getUserAgentString() + " AshenFrontierAndroid/1.2.1");
-
+                  s.setUserAgentString(s.getUserAgentString()+" AshenFrontierAndroid/1.2.1");
                   WebView.setWebContentsDebuggingEnabled(false);
+                  webView.setWebViewClient(new WebViewClient());
                   webView.setWebChromeClient(new WebChromeClient());
-                  webView.setWebViewClient(new WebViewClient() {
-                      @Override
-                      public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
-                          if (webView != null) {
-                              webView.destroy();
-                              webView = null;
-                          }
-                          createWebView(null);
-                          return true;
-                      }
-                  });
-
-                  if (state == null || webView.restoreState(state) == null) {
-                      webView.loadUrl("file:///android_asset/game/index.html");
-                  }
+                  if (state == null || webView.restoreState(state) == null) webView.loadUrl("file:///android_asset/game/index.html");
               }
-
-              private void hideSystemBars() {
+              private void hideBars() {
                   if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                      WindowInsetsController controller = getWindow().getInsetsController();
-                      if (controller != null) {
-                          controller.hide(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
-                          controller.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+                      WindowInsetsController c = getWindow().getInsetsController();
+                      if (c != null) {
+                          c.hide(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
+                          c.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
                       }
                   } else {
                       getWindow().getDecorView().setSystemUiVisibility(
-                          View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY |
-                          View.SYSTEM_UI_FLAG_FULLSCREEN |
-                          View.SYSTEM_UI_FLAG_HIDE_NAVIGATION |
-                          View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN |
-                          View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION |
-                          View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
+                          View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY | View.SYSTEM_UI_FLAG_FULLSCREEN |
+                          View.SYSTEM_UI_FLAG_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN |
+                          View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION | View.SYSTEM_UI_FLAG_LAYOUT_STABLE);
                   }
               }
-
-              @Override
-              public void onWindowFocusChanged(boolean focus) {
-                  super.onWindowFocusChanged(focus);
-                  if (focus) hideSystemBars();
-              }
-
-              @Override
-              public void onBackPressed() {
-                  if (webView == null) {
-                      super.onBackPressed();
-                      return;
-                  }
-                  webView.evaluateJavascript("Boolean(window.__ashenHandleBack && window.__ashenHandleBack())", value -> {
-                      if (!"true".equals(value)) {
-                          if (webView.canGoBack()) webView.goBack();
-                          else moveTaskToBack(true);
-                      }
+              @Override public void onWindowFocusChanged(boolean f) { super.onWindowFocusChanged(f); if (f) hideBars(); }
+              @Override public void onBackPressed() {
+                  if (webView == null) { super.onBackPressed(); return; }
+                  webView.evaluateJavascript("Boolean(window.__ashenHandleBack && window.__ashenHandleBack())", v -> {
+                      if (!"true".equals(v)) { if (webView.canGoBack()) webView.goBack(); else moveTaskToBack(true); }
                   });
               }
-
-              @Override
-              protected void onSaveInstanceState(Bundle out) {
-                  if (webView != null) webView.saveState(out);
-                  super.onSaveInstanceState(out);
-              }
-
-              @Override
-              protected void onPause() {
-                  if (webView != null) {
-                      webView.evaluateJavascript("window.dispatchEvent(new Event('pagehide'))", null);
-                      webView.onPause();
-                      webView.pauseTimers();
-                  }
-                  super.onPause();
-              }
-
-              @Override
-              protected void onResume() {
-                  super.onResume();
-                  if (webView != null) {
-                      webView.resumeTimers();
-                      webView.onResume();
-                  }
-                  hideSystemBars();
-              }
-
-              @Override
-              protected void onDestroy() {
-                  if (webView != null) {
-                      webView.loadUrl("about:blank");
-                      webView.stopLoading();
-                      webView.removeAllViews();
-                      webView.destroy();
-                      webView = null;
-                  }
-                  super.onDestroy();
-              }
+              @Override protected void onSaveInstanceState(Bundle out) { if (webView != null) webView.saveState(out); super.onSaveInstanceState(out); }
+              @Override protected void onPause() { if (webView != null) { webView.onPause(); webView.pauseTimers(); } super.onPause(); }
+              @Override protected void onResume() { super.onResume(); if (webView != null) { webView.resumeTimers(); webView.onResume(); } hideBars(); }
+              @Override protected void onDestroy() { if (webView != null) { webView.loadUrl("about:blank"); webView.destroy(); webView=null; } super.onDestroy(); }
           }
           EOF
 
@@ -382,26 +322,16 @@ jobs:
           FINAL="$OUT/灰烬边境-v1.2.1-修复安装版.apk"
           KEYSTORE="$OUT/灰烬边境-v1.2.1-签名密钥.jks"
           mkdir -p "$OUT"
-
-          keytool -genkeypair -noprompt \
-            -keystore "$KEYSTORE" \
-            -storepass 'AshenFrontier_2026' \
-            -keypass 'AshenFrontier_2026' \
-            -alias ashenfrontier \
-            -keyalg RSA -keysize 4096 -validity 10000 \
+          keytool -genkeypair -noprompt -keystore "$KEYSTORE" \
+            -storepass 'AshenFrontier_2026' -keypass 'AshenFrontier_2026' \
+            -alias ashenfrontier -keyalg RSA -keysize 4096 -validity 10000 \
             -dname 'CN=Ashen Frontier, OU=Android Game, O=WXY, L=Local, ST=NA, C=US'
-
           "$ANDROID_HOME/build-tools/35.0.0/zipalign" -f -p 4 "$UNSIGNED" "$ALIGNED"
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" sign \
-            --ks "$KEYSTORE" \
-            --ks-key-alias ashenfrontier \
-            --ks-pass pass:AshenFrontier_2026 \
-            --key-pass pass:AshenFrontier_2026 \
-            --v1-signing-enabled true \
-            --v2-signing-enabled true \
-            --v3-signing-enabled true \
-            --v4-signing-enabled false \
-            --out "$FINAL" "$ALIGNED"
+            --ks "$KEYSTORE" --ks-key-alias ashenfrontier \
+            --ks-pass pass:AshenFrontier_2026 --key-pass pass:AshenFrontier_2026 \
+            --v1-signing-enabled true --v2-signing-enabled true --v3-signing-enabled true \
+            --v4-signing-enabled false --out "$FINAL" "$ALIGNED"
           rm -f "$ALIGNED"
 
       - name: Verify package compatibility and contents
@@ -411,26 +341,23 @@ jobs:
           OUT='tools/ashen-apk-v121-compat/output'
           APK="$OUT/灰烬边境-v1.2.1-修复安装版.apk"
           INFO="$OUT/安装包验证信息.txt"
-
           unzip -t "$APK"
           "$ANDROID_HOME/build-tools/35.0.0/zipalign" -c -v 4 "$APK"
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK" | tee "$INFO"
           "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" | tee -a "$INFO"
-
           grep -q "package: name='com.wxy.ashenfrontier.compat' versionCode='121' versionName='1.2.1'" "$INFO"
           grep -q "Verified using v1 scheme (JAR signing): true" "$INFO"
           grep -q "Verified using v2 scheme (APK Signature Scheme v2): true" "$INFO"
           grep -q "Verified using v3 scheme (APK Signature Scheme v3): true" "$INFO"
           unzip -l "$APK" | tee -a "$INFO"
           test "$(unzip -p "$APK" 'assets/game/assets/*.js' | wc -c)" -gt 500000
-
           sha256sum "$APK" > "$OUT/SHA256.txt"
           cat > "$OUT/签名密钥说明.txt" <<'EOF'
           密钥文件：灰烬边境-v1.2.1-签名密钥.jks
           别名：ashenfrontier
           密钥库密码：AshenFrontier_2026
           密钥密码：AshenFrontier_2026
-          请保留该密钥，后续升级必须使用同一密钥签名。
+          后续升级必须使用同一密钥签名。
           EOF
           cd tools/ashen-apk-v121-compat/work
           zip -qr ../output/灰烬边境-v1.2.1-Android工程源码.zip android
