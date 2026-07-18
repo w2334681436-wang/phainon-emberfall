@@ -1,0 +1,81 @@
+name: Diagnose Ashen Source Reconstruction
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/diagnose-ashen-source.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reconstruct and capture every result
+        shell: bash
+        run: |
+          set +e
+          exec > >(tee /tmp/ashen-diagnose.log) 2>&1
+          set -x
+          ROOT='tools/ashen-diagnose'
+          WEB="$ROOT/web"
+          rm -rf "$ROOT"
+          mkdir -p "$WEB"
+
+          ls -l tools/ashen-apk tools/ashen-apk-v110 tools/ashen-apk-v120
+          cat tools/ashen-apk/source.part00 tools/ashen-apk/source.part01 tools/ashen-apk/source.part02 tools/ashen-apk/source.part03 tools/ashen-apk/source.part04 tools/ashen-apk/source.part05a tools/ashen-apk/source.part05b tools/ashen-apk/source.part05c | base64 --decode > /tmp/base.tar.xz
+          echo BASE64_STATUS=$?
+          sha256sum /tmp/base.tar.xz
+          xz --test /tmp/base.tar.xz
+          echo XZ_STATUS=$?
+          tar -xJvf /tmp/base.tar.xz -C "$WEB"
+          echo TAR_STATUS=$?
+          find "$WEB" -maxdepth 3 -type f -printf '%p %s\n' | sort
+
+          cat tools/ashen-apk-v110/patch.safe15.00 tools/ashen-apk-v110/patch.safe15.01 tools/ashen-apk-v110/patch.safe15.02 tools/ashen-apk-v110/patch.safe15.03 tools/ashen-apk-v110/patch.safe15.04 > /tmp/v110.patch
+          wc -c /tmp/v110.patch
+          sed -n '1,80p' /tmp/v110.patch
+          (cd "$WEB" && git apply --check --recount --whitespace=nowarn /tmp/v110.patch)
+          echo V110_GIT_CHECK=$?
+          (cd "$WEB" && patch --dry-run --batch --forward --fuzz=3 -p1 < /tmp/v110.patch)
+          echo V110_PATCH_CHECK=$?
+          (cd "$WEB" && patch --batch --forward --fuzz=3 -p1 < /tmp/v110.patch)
+          echo V110_PATCH_APPLY=$?
+
+          cat tools/ashen-apk-v120/update.part00 tools/ashen-apk-v120/update.part01 tools/ashen-apk-v120/update.part02 | base64 --decode > /tmp/v120.patch.gz
+          echo V120_BASE64=$?
+          gzip -t /tmp/v120.patch.gz
+          echo V120_GZIP_TEST=$?
+          gzip -dc /tmp/v120.patch.gz > /tmp/v120.patch
+          echo V120_GZIP_DECODE=$?
+          wc -c /tmp/v120.patch
+          sed -n '1,100p' /tmp/v120.patch
+          (cd "$WEB" && git apply --check --recount --whitespace=nowarn /tmp/v120.patch)
+          echo V120_GIT_CHECK=$?
+          (cd "$WEB" && patch --dry-run --batch --forward --fuzz=3 -p1 < /tmp/v120.patch)
+          echo V120_PATCH_CHECK=$?
+          (cd "$WEB" && patch --batch --forward --fuzz=3 -p1 < /tmp/v120.patch)
+          echo V120_PATCH_APPLY=$?
+
+          find "$WEB" -name '*.rej' -o -name '*.orig' -print
+          node -p "require('./$WEB/package.json').version" 2>&1
+          grep -n "GAME_VERSION" "$WEB/src/data.js" 2>&1
+          cp /tmp/ashen-diagnose.log "$ROOT/diagnose.log"
+          cp /tmp/v110.patch "$ROOT/v110.patch"
+          cp /tmp/v120.patch "$ROOT/v120.patch"
+          tar -czf ashen-diagnose.tar.gz "$ROOT"
+          exit 0
+
+      - name: Upload diagnostic package
+        uses: actions/upload-artifact@v4
+        with:
+          name: ashen-source-diagnostic
+          path: ashen-diagnose.tar.gz
+          if-no-files-found: error
+          retention-days: 3
